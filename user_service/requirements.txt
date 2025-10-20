@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic[email]
+pydantic-settings
+python-jose[cryptography]
+passlib[bcrypt]
+pyodbc # For connecting to MS SQL Server
+aioodbc

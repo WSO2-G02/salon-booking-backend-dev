@@ -27,7 +27,7 @@
          ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
          │  Appointment    │    │ Notification    │    │ Reports &       │
          │  Service        │    │ Service         │    │ Analytics       │
-         │  Port: 8004     │    │ (RabbitMQ)      │    │ Port: 8006      │
+         │  Port: 8004     │    │ Port: 8005      │    │ Port: 8006      │
          └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 

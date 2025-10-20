@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from user_service.app.main import app
-from user_service.app import models
+from user_service.core.main import app
+from user_service.core import models
 from common.database import get_db, Base
 from common.security import verify_password
 
