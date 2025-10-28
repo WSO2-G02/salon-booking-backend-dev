@@ -1,0 +1,1 @@
+This directory contains the files used by the notification microservice of the Salon Appointment System developed by Group 02 of the WSO2 Linux and DevOps Training Program 2025
