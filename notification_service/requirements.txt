@@ -4,5 +4,7 @@ psycopg2-binary
 python-dotenv
 jinja2
 pydantic-settings
+pydantic
 pyodbc
 PyJWT
+requests

@@ -1,2 +1,4 @@
 .env
 test.ps1
+test.py
+jwt_generator.py
