@@ -89,11 +89,6 @@ POSTGRES_DB=salon_booking
 SECRET_KEY=your-very-secret-key-change-in-production
 ACCESS_TOKEN_EXPIRE_MINUTES=30
 
-# RabbitMQ Configuration
-RABBITMQ_HOST=localhost
-RABBITMQ_USER=salon_user
-RABBITMQ_PASSWORD=salon_password
-
 # Email Configuration
 SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
