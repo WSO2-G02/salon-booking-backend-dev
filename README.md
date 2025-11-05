@@ -160,7 +160,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
 
 # Terminal 5: Notification Service
 cd notification-service
-python app/main.py
+uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
 
 # Terminal 6: Reports & Analytics
 cd reports-analytics
