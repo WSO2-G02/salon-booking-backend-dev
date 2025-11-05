@@ -36,6 +36,8 @@ def send_email_notification(
     token = authorization.replace("Bearer ", "").strip()
     user_id = validate_token(token)
 
+    print(email_req)
+
     # Send email
     success = send_email(email_req.to_email, email_req.subject, email_req.message)
 
@@ -63,3 +65,4 @@ def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+
