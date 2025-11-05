@@ -5,7 +5,13 @@ Defines services offered by the salon.
 from sqlalchemy import Column, Integer, String, Numeric, Boolean, DateTime
 from sqlalchemy.sql import func
 import sys
-sys.path.append('../../')
+import os
+
+# Add parent directory to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(os.path.dirname(current_dir))
+sys.path.insert(0, parent_dir)
+
 from common.database import Base
 
 class Service(Base):
