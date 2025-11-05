@@ -34,7 +34,6 @@
 ### Technology Stack
 - **Framework**: FastAPI
 - **Database**: PostgreSQL with SQLAlchemy ORM
-- **Message Queue**: RabbitMQ
 - **Authentication**: JWT tokens
 - **Password Security**: bcrypt
 - **API Documentation**: Automatic with FastAPI/OpenAPI
@@ -71,7 +70,7 @@ salon-booking-system/
 ├── service-management/        # Port 8002
 ├── staff-management/         # Port 8003
 ├── appointment-service/      # Port 8004
-├── notification-service/     # RabbitMQ Consumer
+├── notification-service/     # Port 8005
 ├── reports-analytics/        # Port 8006
 ├── docker-compose.yml
 └── requirements.txt
