@@ -34,7 +34,6 @@
 ### Technology Stack
 - **Framework**: FastAPI
 - **Database**: PostgreSQL with SQLAlchemy ORM
-- **Message Queue**: RabbitMQ
 - **Authentication**: JWT tokens
 - **Password Security**: bcrypt
 - **API Documentation**: Automatic with FastAPI/OpenAPI
@@ -71,7 +70,7 @@ salon-booking-system/
 ├── service-management/        # Port 8002
 ├── staff-management/         # Port 8003
 ├── appointment-service/      # Port 8004
-├── notification-service/     # RabbitMQ Consumer
+├── notification-service/     # Port 8005
 ├── reports-analytics/        # Port 8006
 ├── docker-compose.yml
 └── requirements.txt
@@ -89,11 +88,6 @@ POSTGRES_DB=salon_booking
 # Security
 SECRET_KEY=your-very-secret-key-change-in-production
 ACCESS_TOKEN_EXPIRE_MINUTES=30
-
-# RabbitMQ Configuration
-RABBITMQ_HOST=localhost
-RABBITMQ_USER=salon_user
-RABBITMQ_PASSWORD=salon_password
 
 # Email Configuration
 SMTP_SERVER=smtp.gmail.com
@@ -161,7 +155,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
 
 # Terminal 5: Notification Service
 cd notification-service
-python app/main.py
+uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
 
 # Terminal 6: Reports & Analytics
 cd reports-analytics
