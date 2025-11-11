@@ -1,96 +1,121 @@
-"""
-Pydantic models for Staff Management API.
-"""
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 from typing import List, Optional
 from datetime import datetime, date, time
-from decimal import Decimal
+import json
 
+
+# STAFF BASE SCHEMA
 class StaffBase(BaseModel):
-    """Base staff schema"""
-    user_id: int
-    employee_id: str
+    """Base schema shared by create and response."""
+    user_id: int = Field(..., description="Reference to user service")
+    employee_id: str = Field(..., description="Internal employee code")
     position: str
-    specialties: Optional[List[str]] = []
+    specialties: Optional[List[str]] = Field(default_factory=list) 
     experience_years: int = 0
-    phone: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    emergency_phone: Optional[str] = None
     hire_date: Optional[date] = None
     is_active: bool = True
-    
-    @validator('employee_id')
+
+    # VALIDATORS
+    @field_validator("employee_id")
     def employee_id_format(cls, v):
-        if not v.strip():
-            raise ValueError('Employee ID cannot be empty')
+        if not v or not v.strip():
+            raise ValueError("Employee ID cannot be empty")
         return v.strip().upper()
-    
-    @validator('experience_years')
+
+    @field_validator("experience_years")
     def experience_positive(cls, v):
         if v < 0:
-            raise ValueError('Experience years cannot be negative')
+            raise ValueError("Experience years cannot be negative")
         return v
 
+
+
+# STAFF CREATE SCHEMA
 class StaffCreate(StaffBase):
-    """Schema for creating new staff members"""
+    """Schema for creating new staff."""
     pass
 
+
+
+# STAFF UPDATE SCHEMA
 class StaffUpdate(BaseModel):
-    """Schema for updating staff information"""
+    """Fields that can be updated."""
     position: Optional[str] = None
     specialties: Optional[List[str]] = None
     experience_years: Optional[int] = None
-    phone: Optional[str] = None
-    emergency_contact: Optional[str] = None
-    emergency_phone: Optional[str] = None
     is_active: Optional[bool] = None
 
+    @field_validator("experience_years")
+    def experience_positive(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Experience years cannot be negative")
+        return v
+
+
+
+# STAFF RESPONSE SCHEMA
+
 class StaffResponse(StaffBase):
-    """Schema for staff responses"""
-    id: int
+    """Returned to client."""
+    id: int  
     created_at: datetime
     updated_at: Optional[datetime]
-    
-    class Config:
-        from_attributes = True
 
+    @field_validator("specialties", mode="before")
+    def parse_specialties(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)  
+            except:
+                return []  
+        return v
+
+    class Config:
+        from_attributes = True  # Works with SQLAlchemy ORM
+
+
+
+# AVAILABILITY BASE SCHEMA
 class AvailabilityBase(BaseModel):
-    """Base availability schema"""
     staff_id: int
-    date: date
+    slot_date: date
     start_time: time
     end_time: time
     availability_type: str = "work"
-    is_available: bool = True
-    notes: Optional[str] = None
+
     
-    @validator('end_time')
-    def end_time_after_start_time(cls, v, values):
-        if 'start_time' in values and v <= values['start_time']:
-            raise ValueError('End time must be after start time')
+    
+    @field_validator("end_time")
+    def validate_end_time(cls, v, info: ValidationInfo):
+        start_time = info.data.get("start_time")
+        if start_time and v <= start_time:
+          raise ValueError("End time must be after start time")
         return v
 
+
 class AvailabilityCreate(AvailabilityBase):
-    """Schema for creating availability slots"""
+    """Used to create availability."""
     pass
 
+
 class AvailabilityResponse(AvailabilityBase):
-    """Schema for availability responses"""
     id: int
-    created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
+
+
+# AVAILABILITY SLOT SCHEMA
 class TimeSlot(BaseModel):
-    """Schema for available time slots"""
     start_time: time
     end_time: time
     duration_minutes: int
 
+
 class StaffAvailabilityResponse(BaseModel):
-    """Schema for staff availability on a specific date"""
     staff_id: int
-    date: date
+    slot_date: date
     available_slots: List[TimeSlot]
     total_available_minutes: int
+
