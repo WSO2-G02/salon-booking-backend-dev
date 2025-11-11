@@ -1,227 +1,231 @@
-"""
-CRUD operations for Staff Management.
-"""
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy import and_, cast, String
 from . import models, schemas
 from typing import List, Optional
-from datetime import datetime, date, time, timedelta
-import requests
+from datetime import datetime, date, timedelta
+import json
 
-def get_staff_member(db: Session, staff_id: int) -> Optional[models.Staff]:
-    """Get staff member by ID"""
-    return db.query(models.Staff).filter(models.Staff.id == staff_id).first()
 
-def get_staff_by_employee_id(db: Session, employee_id: str) -> Optional[models.Staff]:
-    """Get staff member by employee ID"""
-    return db.query(models.Staff).filter(models.Staff.employee_id == employee_id).first()
+def _decode_specialties(staff_obj):
+    if staff_obj and isinstance(staff_obj.specialties, str):
+        try:
+            staff_obj.specialties = json.loads(staff_obj.specialties)
+        except:
+            staff_obj.specialties = []
+    return staff_obj
 
-def get_staff_members(
-    db: Session, 
-    skip: int = 0, 
+
+# GET STAFF BY user_id
+async def get_staff_member(db: AsyncSession, user_id: int) -> Optional[models.Staff]:
+    """Fetch staff record using user_id instead of internal id"""
+    result = await db.execute(
+        select(models.Staff).filter(models.Staff.user_id == user_id)
+    )
+    staff = result.scalars().first()
+    return _decode_specialties(staff)
+
+    #return result.scalars().first()
+
+
+# GET STAFF BY employee_id
+async def get_staff_by_employee_id(db: AsyncSession, employee_id: str):
+    result = await db.execute(
+        select(models.Staff).filter(models.Staff.employee_id == employee_id)
+    )
+    staff = result.scalars().first()
+    return _decode_specialties(staff) 
+
+    #return result.scalars().first()
+
+
+
+# GET STAFF LIST (with MSSQL fix)
+async def get_staff_members(
+    db: AsyncSession,
+    skip: int = 0,
     limit: int = 100,
     active_only: bool = True,
     position: Optional[str] = None
-) -> List[models.Staff]:
-    """
-    Get list of staff members with optional filtering.
-    
-    Args:
-        db: Database session
-        skip: Number of records to skip
-        limit: Maximum number of records to return
-        active_only: Only return active staff
-        position: Filter by position
-    
-    Returns:
-        List of staff models
-    """
-    query = db.query(models.Staff)
-    
+):
+    query = select(models.Staff)
+
     if active_only:
         query = query.filter(models.Staff.is_active == True)
-    
+
     if position:
         query = query.filter(models.Staff.position == position)
-    
-    return query.offset(skip).limit(limit).all()
 
-def create_staff_member(db: Session, staff: schemas.StaffCreate) -> models.Staff:
-    """
-    Create a new staff member.
-    
-    Args:
-        db: Database session
-        staff: Staff creation data
-    
-    Returns:
-        Created staff model
-    
-    Raises:
-        ValueError: If employee ID already exists or user doesn't exist
-    """
-    # Check if employee ID already exists
-    existing_staff = get_staff_by_employee_id(db, staff.employee_id)
-    if existing_staff:
+    query = query.order_by(models.Staff.user_id)
+
+    result = await db.execute(query.offset(skip).limit(limit))
+    staff_list = result.scalars().all()
+    return [_decode_specialties(s) for s in staff_list]
+
+
+
+# CREATE STAFF
+async def create_staff_member(db: AsyncSession, staff: schemas.StaffCreate) -> models.Staff:
+    existing = await get_staff_by_employee_id(db, staff.employee_id)
+    if existing:
         raise ValueError("Employee ID already exists")
     
-    # TODO: In production, verify user_id exists in User Service
-    # This would require an API call to the User Service
-    
-    db_staff = models.Staff(**staff.dict())
-    db.add(db_staff)
-    db.commit()
-    db.refresh(db_staff)
-    return db_staff
+    data = staff.dict()
 
-def update_staff_member(
-    db: Session, 
-    staff_id: int, 
+    # convert Python list → JSON 
+    data["specialties"] = json.dumps(data["specialties"])
+
+    db_staff = models.Staff(**data)
+
+    db.add(db_staff)
+    await db.commit()
+    await db.refresh(db_staff)
+
+    return _decode_specialties(db_staff)
+
+
+
+# UPDATE by user_id
+async def update_staff_member(
+    db: AsyncSession,
+    user_id: int,
     staff_update: schemas.StaffUpdate
-) -> Optional[models.Staff]:
-    """Update staff member information"""
-    db_staff = get_staff_member(db, staff_id)
+):
+    db_staff = await get_staff_member(db, user_id)
     if not db_staff:
         return None
-    
+
     update_data = staff_update.dict(exclude_unset=True)
+
+    if "specialties" in update_data:
+        update_data["specialties"] = json.dumps(update_data["specialties"])
+
     for field, value in update_data.items():
         setattr(db_staff, field, value)
-    
-    db.commit()
-    db.refresh(db_staff)
-    return db_staff
 
-def create_availability(db: Session, availability: schemas.AvailabilityCreate) -> models.StaffAvailability:
+    await db.commit()
+    await db.refresh(db_staff)
+
+    return _decode_specialties(db_staff)
+
+
+
+# CREATE AVAILABILITY
+async def create_availability(db: AsyncSession, availability: schemas.AvailabilityCreate):
     """
-    Create a new availability slot for a staff member.
-    
-    Args:
-        db: Database session
-        availability: Availability data
-    
-    Returns:
-        Created availability model
+    IMPORTANT: construct the object using the exact Azure DB column names
+    (slot_date, start_time, end_time, availability_type).
     """
-    db_availability = models.StaffAvailability(**availability.dict())
+    db_availability = models.StaffAvailability(
+        staff_id=availability.staff_id,
+        slot_date=availability.slot_date,
+        start_time=availability.start_time,
+        end_time=availability.end_time,
+        availability_type=availability.availability_type
+    )
     db.add(db_availability)
-    db.commit()
-    db.refresh(db_availability)
+    await db.commit()
+    await db.refresh(db_availability)
     return db_availability
 
-def get_staff_availability(
-    db: Session, 
-    staff_id: int, 
-    target_date: date
-) -> List[models.StaffAvailability]:
-    """
-    Get staff availability for a specific date.
-    
-    Args:
-        db: Database session
-        staff_id: Staff member ID
-        target_date: Date to check availability
-    
-    Returns:
-        List of availability slots for the date
-    """
-    return db.query(models.StaffAvailability).filter(
-        and_(
-            models.StaffAvailability.staff_id == staff_id,
-            models.StaffAvailability.date == target_date,
-            models.StaffAvailability.is_available == True
-        )
-    ).all()
+#async def create_availability(db: AsyncSession, availability: schemas.AvailabilityCreate):
+#    db_availability = models.StaffAvailability(**availability.dict())
+#    db.add(db_availability)
+#    await db.commit()
+#    await db.refresh(db_availability)
+#    return db_availability
 
-def calculate_available_time_slots(
-    db: Session,
+
+
+# Availability by staff_id
+async def get_staff_availability(db: AsyncSession, staff_id: int, target_date: date):
+    """
+    Query uses slot_date (the actual column in Azure DB) and DOES NOT use
+    is_available / notes / created_at because they don't exist in the DB.
+    """
+    result = await db.execute(
+        select(models.StaffAvailability).filter(
+            and_(
+                models.StaffAvailability.staff_id == staff_id,
+                models.StaffAvailability.slot_date == target_date
+            )
+        )
+    )
+    return result.scalars().all()
+
+
+  
+
+#  CALCULATE AVAILABLE TIME SLOTS
+async def calculate_available_time_slots(
+    db: AsyncSession,
     staff_id: int,
     target_date: date,
     service_duration_minutes: int = 60
-) -> schemas.StaffAvailabilityResponse:
-    """
-    Calculate available time slots for booking appointments.
-    
-    This function considers:
-    1. Staff's working hours for the day
-    2. Existing appointments (would need to call Appointment Service)
-    3. Service duration requirements
-    
-    Args:
-        db: Database session
-        staff_id: Staff member ID
-        target_date: Date to check
-        service_duration_minutes: Required service duration
-    
-    Returns:
-        Available time slots
-    """
-    # Get staff availability for the date
-    availability_slots = get_staff_availability(db, staff_id, target_date)
-    
+):
+    availability_slots = await get_staff_availability(db, staff_id, target_date)
+
     if not availability_slots:
         return schemas.StaffAvailabilityResponse(
             staff_id=staff_id,
-            date=target_date,
+            slot_date=target_date,
             available_slots=[],
             total_available_minutes=0
         )
-    
-    # TODO: In production, call Appointment Service to get existing appointments
-    # existing_appointments = get_existing_appointments(staff_id, target_date)
-    existing_appointments = []  # Placeholder
-    
+
     available_slots = []
     total_minutes = 0
-    
+
     for availability in availability_slots:
-        # Convert times to datetime for easier calculation
-        start_datetime = datetime.combine(target_date, availability.start_time)
-        end_datetime = datetime.combine(target_date, availability.end_time)
-        
-        # Generate time slots based on service duration
-        current_time = start_datetime
-        while current_time + timedelta(minutes=service_duration_minutes) <= end_datetime:
-            slot_end = current_time + timedelta(minutes=service_duration_minutes)
-            
-            # Check if this slot conflicts with existing appointments
-            is_available = True
-            for appointment in existing_appointments:
-                # TODO: Implement appointment conflict checking logic
-                pass
-            
-            if is_available:
-                available_slots.append(schemas.TimeSlot(
-                    start_time=current_time.time(),
+        # availability.slot_date / start_time / end_time come from DB
+        start_dt = datetime.combine(target_date, availability.start_time)
+        end_dt = datetime.combine(target_date, availability.end_time)
+        current = start_dt
+
+        while current + timedelta(minutes=service_duration_minutes) <= end_dt:
+            slot_end = current + timedelta(minutes=service_duration_minutes)
+
+            available_slots.append(
+                schemas.TimeSlot(
+                    start_time=current.time(),
                     end_time=slot_end.time(),
                     duration_minutes=service_duration_minutes
-                ))
-                total_minutes += service_duration_minutes
-            
-            # Move to next possible slot (typically 15-30 minute intervals)
-            current_time += timedelta(minutes=30)  # 30-minute intervals
-    
+                )
+            )
+            total_minutes += service_duration_minutes
+
+            current += timedelta(minutes=30)
+
     return schemas.StaffAvailabilityResponse(
         staff_id=staff_id,
-        date=target_date,
+        slot_date=target_date,
         available_slots=available_slots,
         total_available_minutes=total_minutes
     )
 
-def get_staff_by_specialty(db: Session, specialty: str) -> List[models.Staff]:
-    """
-    Get staff members who specialize in a specific service.
-    
-    Args:
-        db: Database session
-        specialty: Service specialty to search for
-    
-    Returns:
-        List of staff members with the specialty
-    """
-    return db.query(models.Staff).filter(
-        and_(
-            models.Staff.specialties.contains([specialty]),
-            models.Staff.is_active == True
+
+
+# GET STAFF BY SPECIALTY
+async def get_staff_by_specialty(db: AsyncSession, specialty: str):
+    result = await db.execute(
+        select(models.Staff).filter(
+            and_(
+                cast(models.Staff.specialties, String).like(f"%{specialty}%"),
+                models.Staff.is_active == True
+            )
         )
-    ).all()
+    )
+    staff_list = result.scalars().all()
+    return [_decode_specialties(s) for s in staff_list]
+
+
+
+# DELETE by user_id
+async def delete_staff_member(db: AsyncSession, user_id: int) -> bool:
+    staff = await get_staff_member(db, user_id)
+    if not staff:
+        return False
+
+    await db.delete(staff)
+    await db.commit()
+    return True
