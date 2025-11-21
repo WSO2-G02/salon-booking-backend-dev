@@ -1,105 +1,147 @@
 """
-Pydantic models for Appointment Service.
+Pydantic Models for Appointment Service
+Request and Response schemas
 """
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
 
-class AppointmentStatus(str, Enum):
-    """Appointment status enumeration"""
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    NO_SHOW = "no_show"
 
-class AppointmentBase(BaseModel):
-    """Base appointment schema"""
+# ============================================================================
+# Appointment Schemas
+# ============================================================================
+
+class AppointmentCreate(BaseModel):
+    """Request model for creating a new appointment"""
+    user_id: int = Field(..., description="Customer user ID")
+    staff_id: int = Field(..., description="Staff member ID")
+    service_id: int = Field(..., description="Service ID")
+    appointment_datetime: datetime = Field(..., description="Appointment date and time")
+    customer_notes: Optional[str] = Field(None, max_length=500, description="Customer notes or requests")
+    
+    @field_validator('appointment_datetime')
+    def datetime_not_past(cls, v):
+        if v < datetime.now():
+            raise ValueError('Appointment datetime cannot be in the past')
+        return v
+
+
+class AppointmentUpdate(BaseModel):
+    """Request model for updating an appointment"""
+    staff_id: Optional[int] = None
+    service_id: Optional[int] = None
+    appointment_datetime: Optional[datetime] = None
+    status: Optional[str] = None
+    customer_notes: Optional[str] = Field(None, max_length=500)
+    staff_notes: Optional[str] = Field(None, max_length=500)
+    cancellation_reason: Optional[str] = Field(None, max_length=500)
+    
+    @field_validator('status')
+    def validate_status(cls, v):
+        if v is not None:
+            allowed_statuses = ['pending', 'confirmed', 'completed', 'cancelled', 'no-show']
+            if v not in allowed_statuses:
+                raise ValueError(f'Status must be one of: {", ".join(allowed_statuses)}')
+        return v
+    
+    @field_validator('appointment_datetime')
+    def datetime_not_past(cls, v):
+        if v is not None and v < datetime.now():
+            raise ValueError('Appointment datetime cannot be in the past')
+        return v
+
+
+class AppointmentResponse(BaseModel):
+    """Response model for appointment"""
+    id: int
     user_id: int
     staff_id: int
     service_id: int
     appointment_datetime: datetime
     duration_minutes: int
     service_price: Decimal
-    customer_notes: Optional[str] = None
-    
-    @validator('appointment_datetime')
-    def appointment_in_future(cls, v):
-        if v <= datetime.now():
-            raise ValueError('Appointment must be in the future')
-        return v
-    
-    @validator('duration_minutes')
-    def duration_positive(cls, v):
-        if v <= 0:
-            raise ValueError('Duration must be positive')
-        return v
-
-class AppointmentCreate(AppointmentBase):
-    """Schema for creating appointments"""
-    pass
-
-class AppointmentUpdate(BaseModel):
-    """Schema for updating appointments"""
-    appointment_datetime: Optional[datetime] = None
-    customer_notes: Optional[str] = None
-    staff_notes: Optional[str] = None
-    status: Optional[AppointmentStatus] = None
-
-class AppointmentResponse(AppointmentBase):
-    """Schema for appointment responses"""
-    id: int
-    status: AppointmentStatus
+    status: str
+    customer_notes: Optional[str]
     staff_notes: Optional[str]
+    cancellation_reason: Optional[str]
     created_at: datetime
-    updated_at: Optional[datetime]
-    confirmed_at: Optional[datetime]
+    updated_at: datetime
     completed_at: Optional[datetime]
     
     class Config:
         from_attributes = True
+        json_encoders = {
+            Decimal: lambda v: float(v)
+        }
 
-class BookingRequest(BaseModel):
-    """Schema for booking requests"""
-    service_id: int
-    staff_id: int
-    appointment_datetime: datetime
-    customer_notes: Optional[str] = None
 
-class BookingResponse(BaseModel):
-    """Schema for booking responses"""
-    appointment_id: int
-    status: str
-    message: str
-    estimated_confirmation_time: Optional[datetime] = None
-
-# Event schemas for RabbitMQ messaging
-class AppointmentEvent(BaseModel):
-    """Base schema for appointment events"""
-    appointment_id: int
+class AppointmentDetailResponse(BaseModel):
+    """Detailed appointment response with related information"""
+    id: int
     user_id: int
+    user_name: Optional[str]
+    user_email: Optional[str]
+    user_phone: Optional[str]
     staff_id: int
+    staff_name: Optional[str]
+    staff_position: Optional[str]
     service_id: int
+    service_name: Optional[str]
     appointment_datetime: datetime
-    event_type: str
-    timestamp: datetime = datetime.now()
-
-class AppointmentBookedEvent(AppointmentEvent):
-    """Event published when appointment is booked"""
-    event_type: str = "appointment_booked"
+    duration_minutes: int
     service_price: Decimal
-    customer_notes: Optional[str] = None
+    status: str
+    customer_notes: Optional[str]
+    staff_notes: Optional[str]
+    cancellation_reason: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+        json_encoders = {
+            Decimal: lambda v: float(v)
+        }
 
-class AppointmentConfirmedEvent(AppointmentEvent):
-    """Event published when appointment is confirmed"""
-    event_type: str = "appointment_confirmed"
-    confirmed_at: datetime
 
-class AppointmentCancelledEvent(AppointmentEvent):
-    """Event published when appointment is cancelled"""
-    event_type: str = "appointment_cancelled"
-    cancelled_at: datetime
-    cancellation_reason: Optional[str] = None
+# ============================================================================
+# Standard API Response Schemas
+# ============================================================================
+
+class SuccessResponse(BaseModel):
+    """Standard success response"""
+    status: str = "success"
+    data: Optional[dict] = None
+    message: str = "Operation completed successfully"
+
+
+class ErrorResponse(BaseModel):
+    """Standard error response"""
+    status: str = "error"
+    error_code: str
+    message: str
+    details: Optional[dict] = None
+
+
+class PaginatedResponse(BaseModel):
+    """Paginated response wrapper"""
+    status: str = "success"
+    data: list
+    pagination: dict
+    
+    @staticmethod
+    def create(data: list, total: int, page: int, limit: int):
+        """Helper to create paginated response"""
+        total_pages = (total + limit - 1) // limit
+        return PaginatedResponse(
+            status="success",
+            data=data,
+            pagination={
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "total_pages": total_pages
+            }
+        )
