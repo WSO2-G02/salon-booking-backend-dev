@@ -1,29 +1,27 @@
+# Use official Python image
 FROM python:3.12-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+# Avoid Python writing .pyc files
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
 
-# Copy requirements and install Python dependencies
+# Install system dependencies (optional but recommended)
+RUN apt-get update && apt-get install -y build-essential && apt-get clean
+
+# Copy requirements first (better caching)
 COPY requirements.txt .
+
+# Install Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the entire project
 COPY . .
 
-# Copy common modules
-COPY ../common /app/common
+# Expose FastAPI port
+EXPOSE 8004
 
-# Expose port
-EXPOSE 8001
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
-
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004"]
+# Start FastAPI server
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8004"]

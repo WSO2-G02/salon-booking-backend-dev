@@ -1,5 +1,5 @@
 """
-Configuration Management for User Service
+Configuration Management for Notification Service
 Loads and validates environment variables
 """
 from pydantic_settings import BaseSettings
@@ -11,27 +11,32 @@ class Settings(BaseSettings):
     """Application Settings loaded from environment variables"""
     
     # Service Configuration
-    SERVICE_NAME: str = "user_service"
-    SERVICE_PORT: int = 8001
+    SERVICE_NAME: str = "notification_service"
+    SERVICE_PORT: int = 8006
     HOST: str = "0.0.0.0"
     
-    # JWT Configuration
+    # JWT Configuration (must match User Service for token validation)
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
-    # Database Configuration
+    # Gmail SMTP Configuration
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str
+    SMTP_PASSWORD: str  # App password
+    SMTP_FROM_NAME: str = "Salon Booking System"
+    
+    # Database Configuration (for token validation)
     DB_HOST: str
     DB_PORT: int = 3306
-    DB_NAME: str = "user_db"
+    DB_NAME: str = "salon-db"
     DB_USER: str
     DB_PASSWORD: str
     
     # CORS Configuration
     ALLOWED_ORIGINS: str = "http://localhost:3000"
-
-    NOTIFICATION_SERVICE_URL: str = "http://localhost:8003"
     
     # Logging
     LOG_LEVEL: str = "INFO"

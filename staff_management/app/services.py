@@ -6,7 +6,8 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime, date, time, timedelta
 import logging
 import mysql.connector
-
+from app.notification_client import get_notification_client
+import asyncio
 from app.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -63,14 +64,42 @@ class StaffService:
         """
         
         try:
+            # Insert the staff record
             staff_id = self.db.execute_update(
                 insert_query,
                 (user_id, employee_id, position, specialties, experience_years, hire_date)
             )
             
+            # --- START: Send staff welcome email notification ---
+            try:
+                # Get the notification client instance
+                notification = get_notification_client()
+                
+                # Get user email and name from the linked 'users' table using user_id
+                user_query = "SELECT email, full_name, username FROM users WHERE id = %s"
+                user = self.db.execute_query(user_query, (user_id,), fetch_one=True)
+                
+                if user and user.get('email'):
+                    # Create an asynchronous task to send the welcome email
+                    asyncio.create_task(
+                        notification.send_create_staff_email(
+                            email=user['email'],
+                            full_name=user.get('full_name'), # Use .get() for safety
+                            position=position,
+                            username=user.get('username'), # Use .get() for safety
+                            token=None  # Called internally, no token needed
+                        )
+                    )
+            except Exception as e:
+                # Log a warning if the email sending fails, but don't stop the function
+                logger.warning(f"Failed to send staff welcome email: {e}")
+            # --- END: Send staff welcome email notification ---
+            
+            # Fetch and return the newly created staff member details
             return self.get_staff_by_id(staff_id)
         
         except mysql.connector.IntegrityError:
+            # Catch potential duplicate keys that slipped past the initial check
             raise ValueError("User ID or Employee ID already exists")
     
     def get_staff_by_id(self, staff_id: int) -> Optional[Dict]:

@@ -1,23 +1,9 @@
-# Service Management Requirements
-# Python 3.9+
-
-# FastAPI Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-
-# Database
-mysql-connector-python==8.2.0
-
-# Authentication & Security
-PyJWT==2.8.0
-
-# Validation
-pydantic==2.5.0
-pydantic-settings==2.1.0
-
-# Environment Variables
-python-dotenv==1.0.0
-
-# Utilities
-python-dateutil==2.8.2
+fastapi
+uvicorn[standard]
+pydantic[email]
+pydantic-settings
+python-multipart
+mysql-connector-python
+bcrypt
+PyJWT
+httpx

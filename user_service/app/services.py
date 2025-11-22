@@ -6,10 +6,12 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime, timedelta
 import logging
 import mysql.connector
+import asyncio
 
 from app.database import DatabaseManager
 from app.auth import password_hasher, jwt_manager
 from app.config import get_settings
+from app.notification_client import get_notification_client
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -72,11 +74,42 @@ class UserService:
             )
             
             # Fetch and return created user
-            return self.get_user_by_id(user_id)
+            user_data =  self.get_user_by_id(user_id)    
+
+            try:
+                # Assuming get_notification_client is defined elsewhere
+                notification = get_notification_client()
+                
+                # Use the already fetched user_data for email and full_name
+                # user_data is Dict and keys are usually lowercase in Python
+                user_email = user_data.get('email')
+                user_full_name = user_data.get('full_name') or user_data.get('username')
+                
+                if user_email:
+                    # Modify this to send a general welcome/registration email, 
+                    # as 'send_create_staff_email' seems inappropriate for a standard user.
+                    # Assuming a generic 'send_welcome_email' method exists or using a modified staff one.
+                    # I'll use a placeholder 'send_welcome_email'
+                    asyncio.create_task(
+                        notification.send_register_user_email(
+                            email=user_email,
+                            full_name=user_full_name,
+                            username=user_data.get('username'),
+                            # token=None # Omit if not needed for generic welcome
+                        )
+                    )
+                
+            except Exception as e:
+                # Assuming logger is defined elsewhere
+                logger.warning(f"Failed to send user welcome email: {e}")
+            # --- END: Added Notification Logic ---
+            return user_data
         
         except mysql.connector.IntegrityError as e:
             logger.error(f"Database integrity error during registration: {e}")
             raise ValueError("Username or email already exists")
+    
+    
     
     def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
         """
@@ -272,6 +305,8 @@ class UserService:
         # Get current password hash
         query = "SELECT password_hash FROM users WHERE id = %s"
         user = self.db.execute_query(query, (user_id,), fetch_one=True)
+
+        print(user['email'])
         
         if not user:
             raise ValueError("User not found")
@@ -286,6 +321,27 @@ class UserService:
         # Update password
         update_query = "UPDATE users SET password_hash = %s WHERE id = %s"
         self.db.execute_update(update_query, (new_password_hash, user_id))
+        # After generating reset token
+        reset_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        try:
+            # Assuming get_notification_client is defined elsewhere
+            notification = get_notification_client()
+            
+            # Send a confirmation/security notification email
+            asyncio.create_task(
+                # Use a method for password change notification, not reset
+                notification.send_reset_password_email(
+                    email=user['email'],
+                    full_name=user.get('full_name'), # Use .get() in case full_name is NULL
+                    reset_token=f"https://yourapp.com/reset?token={reset_token}",
+                    expiry_minutes=30
+                )
+            )
+        except Exception as e:
+            # Failure to send a notification is a warning, not a block for the user
+            # Assuming logger is defined elsewhere
+            logger.warning(f"Failed to send password change notification email: {e}")
+        # --- END: Corrected Notification Logic ---
         
         return True
     

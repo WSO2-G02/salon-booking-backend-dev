@@ -1,8 +1,9 @@
 fastapi
-uvicorn
-sqlalchemy
-python-dotenv
-psycopg2-binary
-pydantic
-requests
-alembic
+uvicorn[standard]
+pydantic[email]
+pydantic-settings
+python-multipart
+mysql-connector-python
+bcrypt
+PyJWT
+httpx
