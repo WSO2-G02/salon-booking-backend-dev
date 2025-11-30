@@ -42,6 +42,12 @@ app.add_middleware(
 # Include routers
 app.include_router(router)
 
+# Root health check endpoint (for Kubernetes probes)
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint for Kubernetes liveness/readiness probes"""
+    return {"status": "healthy", "service": "reports_analytics"}
+
 
 # ============================================================================
 # Exception Handlers

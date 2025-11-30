@@ -76,7 +76,7 @@ spec:
                 configMapKeyRef:
                   name: salon-config
                   key: SMTP_PORT
-            - name: SMTP_USERNAME
+            - name: SMTP_USER
               valueFrom:
                 secretKeyRef:
                   name: salon-secrets

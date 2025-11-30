@@ -34,7 +34,9 @@ class Settings(BaseSettings):
     NOTIFICATION_SERVICE_URL: str = "http://localhost:8006"
     
     # Logging
-    LOG_LEVEL: str = "INFO"    class Config:
+    LOG_LEVEL: str = "INFO"
+    
+    class Config:
         env_file = ".env"
         case_sensitive = True
     

@@ -9,8 +9,8 @@ data:
   ACCESS_TOKEN_EXPIRE_MINUTES: "15"
   REFRESH_TOKEN_EXPIRE_DAYS: "7"
 
-  # Database Configuration (AWS RDS)
-  DB_HOST: "database-1.cn8e0eyq896c.eu-north-1.rds.amazonaws.com"
+  # Database Configuration (AWS RDS via K8s Service)
+  DB_HOST: "aws-rds"
   DB_PORT: "3306"
   DB_NAME: "salon-db"
   DB_USER: "admin"
