@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # CORS Configuration
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
-    NOTIFICATION_SERVICE_URL: str = "http://localhost:8003"
+    NOTIFICATION_SERVICE_URL: str = "http://localhost:8006"
     
     # Logging
     LOG_LEVEL: str = "INFO"
