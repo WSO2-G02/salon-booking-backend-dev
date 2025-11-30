@@ -13,11 +13,11 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8001
-    targetPort: 8001
-    nodePort: 30001  # Access via <EC2-IP>:30001
-    protocol: TCP
-    name: http
+    - port: 8001
+      targetPort: 8001
+      nodePort: 30001 # Access via <EC2-IP>:30001
+      protocol: TCP
+      name: http
   selector:
     app: user-service
 
@@ -32,11 +32,11 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8002
-    targetPort: 8002
-    nodePort: 30002  # Access via <EC2-IP>:30002
-    protocol: TCP
-    name: http
+    - port: 8002
+      targetPort: 8002
+      nodePort: 30002 # Access via <EC2-IP>:30002
+      protocol: TCP
+      name: http
   selector:
     app: service-management
 
@@ -51,11 +51,11 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8003
-    targetPort: 8003
-    nodePort: 30003  # Access via <EC2-IP>:30003
-    protocol: TCP
-    name: http
+    - port: 8003
+      targetPort: 8003
+      nodePort: 30003 # Access via <EC2-IP>:30003
+      protocol: TCP
+      name: http
   selector:
     app: staff-service
 
@@ -70,11 +70,11 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8004
-    targetPort: 8004
-    nodePort: 30004  # Access via <EC2-IP>:30004
-    protocol: TCP
-    name: http
+    - port: 8004
+      targetPort: 8004
+      nodePort: 30004 # Access via <EC2-IP>:30004
+      protocol: TCP
+      name: http
   selector:
     app: appointment-service
 
@@ -89,11 +89,11 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8005
-    targetPort: 8005
-    nodePort: 30005  # Access via <EC2-IP>:30005
-    protocol: TCP
-    name: http
+    - port: 8005
+      targetPort: 8005
+      nodePort: 30005 # Access via <EC2-IP>:30005
+      protocol: TCP
+      name: http
   selector:
     app: reports-service
 
@@ -108,10 +108,10 @@ metadata:
 spec:
   type: NodePort
   ports:
-  - port: 8006
-    targetPort: 8006
-    nodePort: 30006  # Access via <EC2-IP>:30006
-    protocol: TCP
-    name: http
+    - port: 8006
+      targetPort: 8006
+      nodePort: 30006 # Access via <EC2-IP>:30006
+      protocol: TCP
+      name: http
   selector:
     app: notification-service

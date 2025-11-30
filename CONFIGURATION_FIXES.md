@@ -13,6 +13,7 @@ This document summarizes the configuration fixes applied to prepare the salon bo
 **Problem:** Kubernetes deployment files had different ports than the Python config.py files.
 
 **Original Incorrect Mapping:**
+
 ```
 Service               Code Port    K8s Port (OLD)    Status
 ────────────────────────────────────────────────────────────
@@ -25,6 +26,7 @@ Notification Service  8006        8003              ❌ Wrong
 ```
 
 **Fixed Mapping:**
+
 ```
 Service               Code Port    K8s Port (NEW)    Status
 ────────────────────────────────────────────────────────────
@@ -37,6 +39,7 @@ Notification Service  8006        8006              ✅ Fixed
 ```
 
 **Files Updated:**
+
 - `k8s/04-staff-service-deployment.yaml` - Changed port 8002 → 8003
 - `k8s/05-notification-service-deployment.yaml` - Changed port 8003 → 8006
 - `k8s/07-service-management-deployment.yaml` - Changed port 8005 → 8002
@@ -50,16 +53,19 @@ Notification Service  8006        8006              ✅ Fixed
 **Problem:** Services trying to communicate with notification service were using wrong port (8003 instead of 8006).
 
 **Files Fixed:**
+
 - `appointment_service/app/config.py` - Changed URL from `:8003` → `:8006`
 - `user_service/app/config.py` - Changed URL from `:8003` → `:8006`
 - `staff_management/app/config.py` - Changed URL from `:8003` → `:8006`
 
 **Before:**
+
 ```python
 NOTIFICATION_SERVICE_URL: str = "http://localhost:8003"
 ```
 
 **After:**
+
 ```python
 NOTIFICATION_SERVICE_URL: str = "http://localhost:8006"
 ```
@@ -73,6 +79,7 @@ NOTIFICATION_SERVICE_URL: str = "http://localhost:8006"
 **File:** `k8s/02-configmap.yaml`
 
 **Fixed:**
+
 ```yaml
 # OLD (Incorrect)
 STAFF_SERVICE_URL: "http://staff-service:8002"
@@ -94,11 +101,13 @@ REPORTS_SERVICE_URL: "http://reports-service:8005"
 **Problem:** `.env` file had MSSQL connection string, but all code expects MySQL.
 
 **Original (appointment_service/.env):**
+
 ```bash
 DATABASE_URL="mssql+pymssql://admin123:user%402025@testdb20251014.database.windows.net:1433/test-db"
 ```
 
 **Resolution:**
+
 - All services now use MySQL (port 3306) as configured in `config.py`
 - Kubernetes uses centralized ConfigMap for DB configuration
 - Option to use MySQL in Kubernetes cluster OR AWS RDS MySQL
@@ -111,11 +120,13 @@ DATABASE_URL="mssql+pymssql://admin123:user%402025@testdb20251014.database.windo
 **Problem:** JWT secret needs to be identical across all 6 services for authentication to work.
 
 **Solution:**
+
 - Centralized JWT secret in `k8s/01-secrets.yaml`
 - All services pull from same Kubernetes Secret
 - Default value from existing .env preserved: `HdUR4eIHkhAD4RG1srYdSh7B_B3egbM-1Fz86GVVK0k`
 
 **Implementation:**
+
 ```yaml
 # k8s/01-secrets.yaml
 stringData:
@@ -123,6 +134,7 @@ stringData:
 ```
 
 All deployment YAMLs reference this:
+
 ```yaml
 - name: JWT_SECRET_KEY
   valueFrom:
@@ -140,9 +152,10 @@ All deployment YAMLs reference this:
 **Solution:** Created `k8s/10-nodeport-services.yaml` with NodePort services.
 
 **Access URLs:**
+
 ```
 http://<EC2-PUBLIC-IP>:30001  → User Service
-http://<EC2-PUBLIC-IP>:30002  → Service Management  
+http://<EC2-PUBLIC-IP>:30002  → Service Management
 http://<EC2-PUBLIC-IP>:30003  → Staff Service
 http://<EC2-PUBLIC-IP>:30004  → Appointment Service
 http://<EC2-PUBLIC-IP>:30005  → Reports Service
@@ -156,6 +169,7 @@ http://<EC2-PUBLIC-IP>:30006  → Notification Service
 **Problem:** No database deployment in Kubernetes manifests.
 
 **Solution:** Created `k8s/11-mysql-deployment.yaml` with:
+
 - MySQL 8.0 container
 - Persistent Volume Claim (10GB)
 - Internal service at `mysql-service:3306`
@@ -168,6 +182,7 @@ http://<EC2-PUBLIC-IP>:30006  → Notification Service
 **Problem:** No way to create database tables and seed initial data.
 
 **Solution:** Created `k8s/init-db.sql` with:
+
 - All required table schemas (users, sessions, services, staff, staff_availability, appointments)
 - Sample data (admin user, 6 services, 3 staff members)
 - Proper foreign key relationships
@@ -179,17 +194,19 @@ http://<EC2-PUBLIC-IP>:30006  → Notification Service
 **Problem:** Template values like "your-email@gmail.com" still in configuration files.
 
 **Solution:**
+
 - Updated `k8s/01-secrets.yaml` with actual JWT secret from .env
 - Added clear instructions for values user needs to replace
 - Set default MySQL password placeholder
 - SMTP credentials marked for user to add
 
 **User must update before deployment:**
+
 ```yaml
 # k8s/01-secrets.yaml
-smtp-username: "your-email@gmail.com"        # ← REPLACE
-smtp-password: "your-gmail-app-password"     # ← REPLACE
-db-password: "YourSecureDBPassword123!"      # ← REPLACE (or keep this)
+smtp-username: "your-email@gmail.com" # ← REPLACE
+smtp-password: "your-gmail-app-password" # ← REPLACE
+db-password: "YourSecureDBPassword123!" # ← REPLACE (or keep this)
 ```
 
 ---
@@ -208,6 +225,7 @@ db-password: "YourSecureDBPassword123!"      # ← REPLACE (or keep this)
 ## Files Modified
 
 ### Kubernetes Deployment Files:
+
 1. `k8s/02-configmap.yaml` - Fixed service URLs and added comments
 2. `k8s/04-staff-service-deployment.yaml` - Port 8002 → 8003
 3. `k8s/05-notification-service-deployment.yaml` - Port 8003 → 8006
@@ -217,6 +235,7 @@ db-password: "YourSecureDBPassword123!"      # ← REPLACE (or keep this)
 7. `k8s/01-secrets.yaml` - Added actual JWT secret value
 
 ### Application Config Files:
+
 1. `appointment_service/app/config.py` - Fixed notification URL
 2. `user_service/app/config.py` - Fixed notification URL
 3. `staff_management/app/config.py` - Fixed notification URL
@@ -244,6 +263,7 @@ Before deploying, verify:
 ## What User Still Needs to Do
 
 ### 1. Update k8s/01-secrets.yaml:
+
 ```yaml
 smtp-username: "your-actual-email@gmail.com"
 smtp-password: "your-16-char-gmail-app-password"
@@ -251,12 +271,14 @@ db-password: "your-chosen-mysql-password"
 ```
 
 ### 2. Update k8s/02-configmap.yaml:
+
 ```yaml
 ALLOWED_ORIGINS: "http://localhost:3000,http://<YOUR-EC2-IP>:3000"
 # Optionally change DB_HOST if using AWS RDS
 ```
 
 ### 3. Update Docker image names in deployment YAMLs:
+
 ```yaml
 # Change from:
 image: salon/user-service:latest
@@ -275,6 +297,7 @@ image: your-dockerhub-username/user-service:latest
 The repository is now ready for Kubernetes deployment on AWS EC2. All port mismatches are fixed, services can communicate properly, and comprehensive deployment documentation has been created.
 
 **Next steps:**
+
 1. Review `AWS_KUBERNETES_DEPLOYMENT_GUIDE.md`
 2. Update the few remaining placeholder values
 3. Follow the deployment guide step-by-step

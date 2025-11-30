@@ -11,48 +11,48 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: salon-api.local
-    http:
-      paths:
-      - path: /api/users
-        pathType: Prefix
-        backend:
-          service:
-            name: user-service
-            port:
-              number: 8001
-      - path: /api/staff
-        pathType: Prefix
-        backend:
-          service:
-            name: staff-service
-            port:
-              number: 8003
-      - path: /api/notifications
-        pathType: Prefix
-        backend:
-          service:
-            name: notification-service
-            port:
-              number: 8006
-      - path: /api/appointments
-        pathType: Prefix
-        backend:
-          service:
-            name: appointment-service
-            port:
-              number: 8004
-      - path: /api/services
-        pathType: Prefix
-        backend:
-          service:
-            name: service-management
-            port:
-              number: 8002
-      - path: /api/reports
-        pathType: Prefix
-        backend:
-          service:
-            name: reports-service
-            port:
-              number: 8005
+    - host: salon-api.local
+      http:
+        paths:
+          - path: /api/users
+            pathType: Prefix
+            backend:
+              service:
+                name: user-service
+                port:
+                  number: 8001
+          - path: /api/staff
+            pathType: Prefix
+            backend:
+              service:
+                name: staff-service
+                port:
+                  number: 8003
+          - path: /api/notifications
+            pathType: Prefix
+            backend:
+              service:
+                name: notification-service
+                port:
+                  number: 8006
+          - path: /api/appointments
+            pathType: Prefix
+            backend:
+              service:
+                name: appointment-service
+                port:
+                  number: 8004
+          - path: /api/services
+            pathType: Prefix
+            backend:
+              service:
+                name: service-management
+                port:
+                  number: 8002
+          - path: /api/reports
+            pathType: Prefix
+            backend:
+              service:
+                name: reports-service
+                port:
+                  number: 8005

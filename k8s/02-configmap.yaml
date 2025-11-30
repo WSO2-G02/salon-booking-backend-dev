@@ -8,23 +8,23 @@ data:
   JWT_ALGORITHM: "HS256"
   ACCESS_TOKEN_EXPIRE_MINUTES: "15"
   REFRESH_TOKEN_EXPIRE_DAYS: "7"
-  
+
   # Database Configuration (MySQL in Kubernetes or AWS RDS)
   # Option 1: MySQL in Kubernetes cluster
-  DB_HOST: "mysql-service"  # Internal Kubernetes service name
+  DB_HOST: "mysql-service" # Internal Kubernetes service name
   # Option 2: AWS RDS MySQL (replace with your RDS endpoint)
   # DB_HOST: "your-rds-endpoint.us-east-1.rds.amazonaws.com"
   DB_PORT: "3306"
   DB_NAME: "salon-db"
   DB_USER: "admin"
-  
+
   # CORS Configuration
   # Add your EC2 public IP or domain after deployment
   ALLOWED_ORIGINS: "http://localhost:3000,http://<YOUR-EC2-IP>:3000"
-  
+
   # Logging
   LOG_LEVEL: "INFO"
-  
+
   # Service URLs (Internal DNS - automatically resolved by Kubernetes)
   USER_SERVICE_URL: "http://user-service:8001"
   STAFF_SERVICE_URL: "http://staff-service:8003"
@@ -32,7 +32,7 @@ data:
   APPOINTMENT_SERVICE_URL: "http://appointment-service:8004"
   SERVICE_MANAGEMENT_URL: "http://service-management:8002"
   REPORTS_SERVICE_URL: "http://reports-service:8005"
-  
+
   # SMTP Configuration (for Notification Service)
   SMTP_SERVER: "smtp.gmail.com"
   SMTP_PORT: "587"

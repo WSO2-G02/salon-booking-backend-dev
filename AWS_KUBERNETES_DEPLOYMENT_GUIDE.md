@@ -1,4 +1,5 @@
 # Complete AWS EC2 + Kubernetes Deployment Guide
+
 ## Salon Booking Microservices - Manual Setup
 
 This guide walks you through deploying your 6 microservices to AWS EC2 with Kubernetes from scratch.
@@ -6,6 +7,7 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 ---
 
 ## 📋 **Table of Contents**
+
 1. [Prerequisites](#prerequisites)
 2. [Phase 1: AWS EC2 Setup](#phase-1-aws-ec2-setup)
 3. [Phase 2: Install Docker & Kubernetes](#phase-2-install-docker--kubernetes)
@@ -20,6 +22,7 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 ## Prerequisites
 
 ### What You Need:
+
 - ✅ AWS Account with billing enabled
 - ✅ Credit card for EC2 instances (free tier eligible)
 - ✅ Gmail account with App Password enabled (for notifications)
@@ -27,6 +30,7 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 - ✅ This repository cloned locally
 
 ### Skills Required:
+
 - Basic Linux command line knowledge
 - Understanding of SSH connections
 - Familiarity with text editors (nano/vim)
@@ -40,14 +44,17 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 **What we're doing:** Launching 3 Ubuntu servers in AWS - one for Kubernetes master (control plane) and two for workers.
 
 1. **Login to AWS Console**
+
    - Go to https://console.aws.amazon.com/
    - Login with your AWS account
 
 2. **Navigate to EC2**
+
    - Search for "EC2" in the top search bar
    - Click "EC2" service
 
 3. **Launch First Instance (Control Plane)**
+
    - Click orange "Launch Instance" button
    - Configure:
      ```
@@ -85,11 +92,13 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 **What we're doing:** Opening network ports so Kubernetes nodes can communicate.
 
 1. **Go to Security Groups**
+
    - In EC2 dashboard, click "Security Groups" in left menu
    - Select "k8s-cluster-sg"
    - Click "Edit inbound rules"
 
 2. **Add These Rules:**
+
    ```
    Type              Protocol  Port Range    Source              Description
    SSH               TCP       22            My IP               SSH access
@@ -108,11 +117,13 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 **What we're doing:** Getting permanent IP addresses that won't change if we restart instances.
 
 1. **Allocate Elastic IPs**
+
    - In EC2 dashboard, click "Elastic IPs" in left menu
    - Click "Allocate Elastic IP address" → Allocate
    - Repeat 3 times (one for each instance)
 
 2. **Associate IPs to Instances**
+
    - Select first Elastic IP → Actions → Associate Elastic IP address
    - Select "k8s-control-plane" instance → Associate
    - Repeat for worker-1 and worker-2
@@ -133,6 +144,7 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 ### Step 2.1: Connect to Each Instance
 
 **For Windows (using PuTTY):**
+
 1. Open PuTTYgen → Load your .ppk key
 2. Open PuTTY
 3. Host: `ubuntu@<EC2-PUBLIC-IP>`
@@ -140,6 +152,7 @@ This guide walks you through deploying your 6 microservices to AWS EC2 with Kube
 5. Click "Open"
 
 **For Mac/Linux:**
+
 ```bash
 chmod 400 salon-k8s-key.pem
 ssh -i salon-k8s-key.pem ubuntu@<EC2-PUBLIC-IP>
@@ -210,6 +223,7 @@ kubeadm version
 ```
 
 **Expected output:**
+
 ```
 Docker version 24.x.x
 Kubernetes v1.28.0
@@ -281,6 +295,7 @@ sudo kubeadm join <CONTROL-PLANE-PRIVATE-IP>:6443 \
 ```
 
 **Expected output:**
+
 ```
 This node has joined the cluster:
 * Certificate signing request was sent to apiserver and a response was received.
@@ -426,15 +441,17 @@ nano 01-secrets.yaml
 ```
 
 **Update these values:**
+
 ```yaml
 stringData:
-  db-password: "YourStrongPassword123!"  # Choose a strong password
-  jwt-secret-key: "HdUR4eIHkhAD4RG1srYdSh7B_B3egbM-1Fz86GVVK0k"  # Keep this or generate new
-  smtp-username: "your-actual-email@gmail.com"  # Your Gmail
-  smtp-password: "your-gmail-app-password"  # Get from Google Account settings
+  db-password: "YourStrongPassword123!" # Choose a strong password
+  jwt-secret-key: "HdUR4eIHkhAD4RG1srYdSh7B_B3egbM-1Fz86GVVK0k" # Keep this or generate new
+  smtp-username: "your-actual-email@gmail.com" # Your Gmail
+  smtp-password: "your-gmail-app-password" # Get from Google Account settings
 ```
 
 **To get Gmail App Password:**
+
 1. Go to https://myaccount.google.com/security
 2. Enable 2-Step Verification
 3. Search for "App passwords"
@@ -447,12 +464,13 @@ nano 02-configmap.yaml
 ```
 
 **Update these values:**
+
 ```yaml
 data:
-  DB_HOST: "mysql-service"  # Keep this if using in-cluster MySQL
+  DB_HOST: "mysql-service" # Keep this if using in-cluster MySQL
   # OR if using AWS RDS:
   # DB_HOST: "your-rds-endpoint.us-east-1.rds.amazonaws.com"
-  
+
   ALLOWED_ORIGINS: "http://localhost:3000,http://<YOUR-CONTROL-PLANE-PUBLIC-IP>:3000"
 ```
 
@@ -519,6 +537,7 @@ kubectl get deployments -n salon-booking
 ```
 
 **Expected output:**
+
 ```
 NAME                    READY   STATUS    RESTARTS   AGE
 mysql-...               1/1     Running   0          5m
@@ -680,21 +699,25 @@ kubectl get endpoints -n salon-booking
 ### Production Improvements:
 
 1. **Set up HTTPS/SSL**
+
    - Install cert-manager
    - Get Let's Encrypt certificates
    - Configure Ingress with TLS
 
 2. **Use AWS RDS for MySQL**
+
    - More reliable than in-cluster MySQL
    - Automated backups
    - Update `DB_HOST` in ConfigMap
 
 3. **Add Monitoring**
+
    - Install Prometheus & Grafana
    - Monitor resource usage
    - Set up alerts
 
 4. **Implement CI/CD**
+
    - GitHub Actions for automated builds
    - Auto-deploy on git push
    - Rolling updates
@@ -709,6 +732,7 @@ kubectl get endpoints -n salon-booking
 ## Summary
 
 ✅ **You've successfully:**
+
 - Created a 3-node Kubernetes cluster on AWS EC2
 - Installed Docker and Kubernetes (kubeadm)
 - Deployed 6 microservices with proper configuration
@@ -717,6 +741,7 @@ kubectl get endpoints -n salon-booking
 - Verified all services are running and communicating
 
 **Your microservices are now live at:**
+
 ```
 User Service:        http://<PUBLIC-IP>:30001/docs
 Service Management:  http://<PUBLIC-IP>:30002/docs
@@ -727,11 +752,13 @@ Notification Service:http://<PUBLIC-IP>:30006/docs
 ```
 
 **Cost Estimate (AWS):**
+
 - 3× t3.medium instances: ~$75/month
 - 30GB EBS storage: ~$3/month
 - **Total: ~$78/month** (stop instances when not in use to save money)
 
 **To stop instances:**
+
 ```bash
 # From AWS Console: EC2 → Instances → Select all → Instance State → Stop
 ```
@@ -741,6 +768,7 @@ Notification Service:http://<PUBLIC-IP>:30006/docs
 ## Questions?
 
 If you encounter issues:
+
 1. Check the Troubleshooting section above
 2. Run: `kubectl get events -n salon-booking --sort-by='.lastTimestamp'`
 3. Check pod logs: `kubectl logs <POD-NAME> -n salon-booking`
