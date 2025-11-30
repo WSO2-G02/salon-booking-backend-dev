@@ -4,19 +4,8 @@ metadata:
   name: aws-rds
   namespace: salon-booking
 spec:
-  type: ClusterIP
+  type: ExternalName
+  externalName: salon-db.c9kqg6azvsza.eu-north-1.rds.amazonaws.com # REPLACE with your actual RDS endpoint
   ports:
     - port: 3306
-      targetPort: 3306
       protocol: TCP
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: aws-rds
-  namespace: salon-booking
-subsets:
-  - addresses:
-      - ip: 51.21.114.88 # AWS RDS IP address
-    ports:
-      - port: 3306
