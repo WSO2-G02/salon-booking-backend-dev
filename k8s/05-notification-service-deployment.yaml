@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: notification-service
-          image: salon/notification-service:latest
+          image: ritzy0717/notification-service:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8006

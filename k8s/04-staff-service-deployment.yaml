@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: staff-service
-          image: salon/staff-service:latest
+          image: ritzy0717/staff-service:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8003

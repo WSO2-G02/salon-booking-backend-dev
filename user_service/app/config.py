@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Database Configuration
     DB_HOST: str
     DB_PORT: int = 3306
-    DB_NAME: str = "user_db"
+    DB_NAME: str = "salon-db"
     DB_USER: str
     DB_PASSWORD: str
     
