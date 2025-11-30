@@ -5,7 +5,7 @@ metadata:
   namespace: salon-booking
 spec:
   type: ExternalName
-  externalName: salon-db.c9kqg6azvsza.eu-north-1.rds.amazonaws.com # REPLACE with your actual RDS endpoint
+  externalName: database-1.cn8e0eyq896c.eu-north-1.rds.amazonaws.com  # REPLACE with your actual RDS endpoint
   ports:
     - port: 3306
       protocol: TCP

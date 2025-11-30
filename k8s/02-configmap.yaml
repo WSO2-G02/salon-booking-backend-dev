@@ -10,10 +10,11 @@ data:
   REFRESH_TOKEN_EXPIRE_DAYS: "7"
 
   # Database Configuration (AWS RDS via K8s Service)
-  DB_HOST: "aws-rds"
+  DB_HOST: "database-1.cn8e0eyq896c.eu-north-1.rds.amazonaws.com"
   DB_PORT: "3306"
   DB_NAME: "salon-db"
   DB_USER: "admin"
+  DB_PASSWORD: "GROUP22025" 
 
   # CORS Configuration
   # Add your EC2 public IP or domain after deployment
