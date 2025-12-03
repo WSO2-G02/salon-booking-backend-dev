@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: salon-booking
-  labels:
-    name: salon-booking
-    environment: production

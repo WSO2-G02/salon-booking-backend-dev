@@ -1,0 +1,64 @@
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: salon-routing
+  namespace: salon-booking
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - salon-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /api/users
+    route:
+    - destination:
+        host: user-service
+        port:
+          number: 8001
+
+  - match:
+    - uri:
+        prefix: /api/staff
+    route:
+    - destination:
+        host: staff-service
+        port:
+          number: 8003
+
+  - match:
+    - uri:
+        prefix: /api/notifications
+    route:
+    - destination:
+        host: notification-service
+        port:
+          number: 8006
+
+  - match:
+    - uri:
+        prefix: /api/appointments
+    route:
+    - destination:
+        host: appointment-service
+        port:
+          number: 8004
+
+  - match:
+    - uri:
+        prefix: /api/services
+    route:
+    - destination:
+        host: service-management
+        port:
+          number: 8002
+
+  - match:
+    - uri:
+        prefix: /api/reports
+    route:
+    - destination:
+        host: reports-service
+        port:
+          number: 8005
