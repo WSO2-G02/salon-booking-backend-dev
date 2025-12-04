@@ -37,7 +37,7 @@ class DatabaseManager:
             
             self.pool = pooling.MySQLConnectionPool(
                 pool_name="service_management_pool",
-                pool_size=10,
+                pool_size=3,
                 pool_reset_session=True,
                 **dbconfig
             )
