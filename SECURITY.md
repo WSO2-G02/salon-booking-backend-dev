@@ -7,10 +7,30 @@ This document describes the security scanning and CI/CD pipeline for the Salon B
 ## CI/CD Pipeline Flow
 
 ```
-Code Push -> Detect Changes -> Build Image -> Trivy Scan -> Push to ECR -> Update GitOps -> ArgoCD Deploy
+Code Push -> Detect Changes -> Unit Tests -> SAST Scan -> Build Image -> Trivy Scan -> Push to ECR -> Update GitOps -> ArgoCD Deploy
 ```
 
+### Pipeline Stages
+
+| Stage | Description | Tool |
+|-------|-------------|------|
+| 1. Detect Changes | Identify which services have changed | Git diff |
+| 2. Unit Tests | Run pytest on changed services | pytest |
+| 3. SAST Scan | Static security analysis of Python code | Bandit |
+| 4. Build Image | Build Docker container | Docker Buildx |
+| 5. Trivy Scan | Container vulnerability scanning | Trivy |
+| 6. Push to ECR | Push image to container registry | AWS ECR |
+| 7. Update GitOps | Update deployment manifests | Git |
+| 8. Deploy | Sync to Kubernetes | ArgoCD |
+
 ## Security Scanning
+
+### Static Application Security Testing (SAST)
+
+- **Tool**: Bandit
+- **Trigger**: On every push and pull request
+- **Scope**: Python source code in app/ directories
+- **Blocking**: No (reports only)
 
 ### Container Image Scanning
 
@@ -32,6 +52,13 @@ Code Push -> Detect Changes -> Build Image -> Trivy Scan -> Push to ECR -> Updat
 - **Tool**: AWS ECR native scanning (scan_on_push enabled)
 - **Trigger**: Automatic on image push
 - **Note**: Provides additional scanning layer after Trivy
+
+## Unit Testing
+
+- **Framework**: pytest
+- **Location**: Each service has a `tests/` directory
+- **Configuration**: `pytest.ini` in each service root
+- **Coverage**: pytest-cov for code coverage reporting
 
 ## Required GitHub Secrets
 
@@ -61,6 +88,5 @@ The following secrets must be configured in GitHub repository settings:
 
 | File | Purpose |
 |------|---------|
-| `build-scan-push.yml` | Build, scan, push images and update GitOps |
+| `ci-cd-pipeline.yml` | Main CI/CD pipeline with tests, SAST, build, scan, push |
 | `dependency-scan.yml` | Scan Python dependencies for vulnerabilities |
-
