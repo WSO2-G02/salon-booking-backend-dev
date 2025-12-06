@@ -1,0 +1,19 @@
+severity:
+  - CRITICAL
+  - HIGH
+
+ignore-unfixed: true
+
+exit-code: 1
+
+format: table
+
+security-checks:
+  - vuln
+  - secret
+  - config
+
+vulnerability:
+  type:
+    - os
+    - library

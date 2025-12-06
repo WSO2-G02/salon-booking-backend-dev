@@ -1,0 +1,251 @@
+name: Build, Scan, and Push
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'user_service/**'
+      - 'appointment_service/**'
+      - 'staff_management/**'
+      - 'service_management/**'
+      - 'reports_analytics/**'
+      - 'notification_service/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'user_service/**'
+      - 'appointment_service/**'
+      - 'staff_management/**'
+      - 'service_management/**'
+      - 'reports_analytics/**'
+      - 'notification_service/**'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to build'
+        required: false
+        type: choice
+        options:
+          - all
+          - user_service
+          - appointment_service
+          - staff_management
+          - service_management
+          - reports_analytics
+          - notification_service
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REGISTRY: 024955634588.dkr.ecr.eu-north-1.amazonaws.com
+
+jobs:
+  detect-changes:
+    name: Detect Changed Services
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.changes.outputs.services }}
+      has_changes: ${{ steps.changes.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          ALL_SERVICES=("user_service" "appointment_service" "staff_management" "service_management" "reports_analytics" "notification_service")
+          
+          # Manual trigger with specific service
+          if [ "${{ github.event.inputs.service }}" != "" ] && [ "${{ github.event.inputs.service }}" != "all" ]; then
+            echo "services=[\"${{ github.event.inputs.service }}\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Manual trigger with all services
+          if [ "${{ github.event.inputs.service }}" == "all" ]; then
+            echo "services=[\"user_service\",\"appointment_service\",\"staff_management\",\"service_management\",\"reports_analytics\",\"notification_service\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Detect changes from git diff
+          SERVICES=()
+          
+          if [ "${{ github.event_name }}" == "push" ]; then
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          else
+            CHANGED_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          for service in "${ALL_SERVICES[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "^${service}/"; then
+              SERVICES+=("\"${service}\"")
+              echo "Detected change in: ${service}"
+            fi
+          done
+          
+          if [ ${#SERVICES[@]} -eq 0 ]; then
+            echo "No service changes detected"
+            echo "services=[]" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            SERVICES_JSON=$(IFS=,; echo "[${SERVICES[*]}]")
+            echo "services=${SERVICES_JSON}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-scan-push:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SERVICE_NAME="${{ matrix.service }}"
+          SHORT_SHA="${GITHUB_SHA::8}"
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${SERVICE_NAME}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ env.ECR_REGISTRY }}/${SERVICE_NAME}:latest"
+          
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
+          echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ steps.meta.outputs.full_image }}
+            ${{ steps.meta.outputs.latest_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.full_image }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-${{ matrix.service }}'
+
+      - name: Run Trivy scanner (blocking)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.full_image }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Push to Amazon ECR
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: push
+        run: |
+          docker push ${{ steps.meta.outputs.full_image }}
+          docker push ${{ steps.meta.outputs.latest_image }}
+          echo "Pushed: ${{ steps.meta.outputs.full_image }}"
+
+      - name: Generate build summary
+        if: always()
+        run: |
+          echo "## ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | ${{ steps.meta.outputs.full_image }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+
+  update-gitops:
+    name: Update GitOps Repository
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-scan-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: WSO2-G02/salon-gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update image tags
+        env:
+          SERVICES: ${{ needs.detect-changes.outputs.services }}
+        run: |
+          cd gitops
+          SHORT_SHA="${GITHUB_SHA::8}"
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          
+          for service in $(echo "$SERVICES" | jq -r '.[]'); do
+            DEPLOYMENT_FILE="staging/${service}/deployment.yaml"
+            if [ -f "$DEPLOYMENT_FILE" ]; then
+              echo "Updating ${service} to tag: ${IMAGE_TAG}"
+              sed -i "s|image: .*${service}:.*|image: ${{ env.ECR_REGISTRY }}/${service}:${IMAGE_TAG}|g" "$DEPLOYMENT_FILE"
+            fi
+          done
+
+      - name: Commit and push changes
+        run: |
+          cd gitops
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update image tags for commit ${{ github.sha }}"
+            git push
+          fi
