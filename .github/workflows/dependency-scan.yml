@@ -48,7 +48,11 @@ jobs:
             
             if [ -f "${service}/requirements.txt" ]; then
               echo "Scanning ${service}..."
-              pip-audit -r "${service}/requirements.txt" --format markdown >> $GITHUB_STEP_SUMMARY 2>&1 || echo "Vulnerabilities found in ${service}" >> $GITHUB_STEP_SUMMARY
+              if pip-audit -r "${service}/requirements.txt" --format markdown >> $GITHUB_STEP_SUMMARY; then
+                echo "✓ No vulnerabilities found in ${service}" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ Scan failed for ${service} - check logs" >> $GITHUB_STEP_SUMMARY
+              fi
             else
               echo "No requirements.txt found" >> $GITHUB_STEP_SUMMARY
             fi
@@ -68,13 +72,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-fs-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v4

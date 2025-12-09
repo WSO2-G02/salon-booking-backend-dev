@@ -38,7 +38,7 @@ on:
 
 env:
   AWS_REGION: eu-north-1
-  ECR_REGISTRY: 024955634588.dkr.ecr.eu-north-1.amazonaws.com
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-north-1.amazonaws.com
   PYTHON_VERSION: '3.12'
 
 jobs:
@@ -49,6 +49,7 @@ jobs:
     outputs:
       services: ${{ steps.changes.outputs.services }}
       has_changes: ${{ steps.changes.outputs.has_changes }}
+      timestamp: ${{ steps.changes.outputs.timestamp }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,6 +59,9 @@ jobs:
       - name: Detect changed services
         id: changes
         run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          
           ALL_SERVICES=("user_service" "appointment_service" "staff_management" "service_management" "reports_analytics" "notification_service")
           
           if [ "${{ github.event.inputs.service }}" != "" ] && [ "${{ github.event.inputs.service }}" != "all" ]; then
@@ -200,7 +204,7 @@ jobs:
         run: |
           SERVICE_NAME="${{ matrix.service }}"
           SHORT_SHA="${GITHUB_SHA::8}"
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           
           IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           FULL_IMAGE="${{ env.ECR_REGISTRY }}/${SERVICE_NAME}:${IMAGE_TAG}"
@@ -224,7 +228,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.meta.outputs.full_image }}
           format: 'sarif'
@@ -241,7 +245,7 @@ jobs:
           category: 'trivy-${{ matrix.service }}'
 
       - name: Trivy scan (blocking check)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ steps.meta.outputs.full_image }}
           format: 'table'
@@ -293,7 +297,7 @@ jobs:
           gunzip -c image-${{ matrix.service }}.tar.gz | docker load
           
           SHORT_SHA="${GITHUB_SHA::8}"
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           
           FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ matrix.service }}:${IMAGE_TAG}"
@@ -325,14 +329,14 @@ jobs:
         run: |
           cd gitops
           SHORT_SHA="${GITHUB_SHA::8}"
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           
           for service in $(echo "$SERVICES" | jq -r '.[]'); do
             DEPLOYMENT_FILE="staging/${service}/deployment.yaml"
             if [ -f "$DEPLOYMENT_FILE" ]; then
               echo "Updating ${service} to tag: ${IMAGE_TAG}"
-              sed -i "s|image: .*${service}:.*|image: ${{ env.ECR_REGISTRY }}/${service}:${IMAGE_TAG}|g" "$DEPLOYMENT_FILE"
+              sed -i "s|^\([[:space:]]*image:[[:space:]]*\).*${service}:.*|\1${{ env.ECR_REGISTRY }}/${service}:${IMAGE_TAG}|g" "$DEPLOYMENT_FILE"
             fi
           done
 

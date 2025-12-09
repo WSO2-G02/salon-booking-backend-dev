@@ -170,9 +170,11 @@ flowchart TD
 
 | Property | Value |
 |----------|-------|
-| ECR Registry | `024955634588.dkr.ecr.eu-north-1.amazonaws.com` |
-| Region | `eu-north-1` |
+| ECR Registry | `<AWS_ACCOUNT_ID>.dkr.ecr.<AWS_REGION>.amazonaws.com` |
+| Region | `<AWS_REGION>` |
 | Scan on Push | Enabled |
+
+> **Note:** Set `<AWS_ACCOUNT_ID>` and `<AWS_REGION>` AWS account ID and region as repository secrets or environment variables.
 
 ### Protected Services
 
