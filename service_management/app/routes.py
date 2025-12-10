@@ -103,6 +103,32 @@ async def get_services(
             detail="Failed to fetch services"
         )
 
+@router.get("/servicespub", response_model=List[ServiceResponse])
+async def get_public_services(
+    category: Optional[str] = Query(None, description="Filter by category"),
+    service_mgmt: ServiceManagementService = Depends(get_service_management_service)
+):
+    """
+    Public endpoint to fetch ACTIVE salon services (NO AUTH REQUIRED)
+
+    - Only returns services where is_active = 1
+    - Can be used on landing pages / before login
+    """
+    try:
+        services = service_mgmt.get_all_services(
+            active_only=True,  # only active services
+            category=category
+        )
+
+        return [ServiceResponse(**service) for service in services]
+
+    except Exception as e:
+        logger.error(f"Error fetching public services: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch public services"
+        )
+
 
 @router.get("/services/{service_id}", response_model=ServiceResponse)
 async def get_service(
