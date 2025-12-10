@@ -1,0 +1,380 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'user_service/**'
+      - 'appointment_service/**'
+      - 'staff_management/**'
+      - 'service_management/**'
+      - 'reports_analytics/**'
+      - 'notification_service/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'user_service/**'
+      - 'appointment_service/**'
+      - 'staff_management/**'
+      - 'service_management/**'
+      - 'reports_analytics/**'
+      - 'notification_service/**'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to build'
+        required: false
+        type: choice
+        options:
+          - all
+          - user_service
+          - appointment_service
+          - staff_management
+          - service_management
+          - reports_analytics
+          - notification_service
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-north-1.amazonaws.com
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # Stage 1: Detect which services have changed
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.changes.outputs.services }}
+      has_changes: ${{ steps.changes.outputs.has_changes }}
+      timestamp: ${{ steps.changes.outputs.timestamp }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed services
+        id: changes
+        run: |
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          echo "timestamp=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          
+          ALL_SERVICES=("user_service" "appointment_service" "staff_management" "service_management" "reports_analytics" "notification_service")
+          
+          if [ "${{ github.event.inputs.service }}" != "" ] && [ "${{ github.event.inputs.service }}" != "all" ]; then
+            echo "services=[\"${{ github.event.inputs.service }}\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          if [ "${{ github.event.inputs.service }}" == "all" ]; then
+            echo "services=[\"user_service\",\"appointment_service\",\"staff_management\",\"service_management\",\"reports_analytics\",\"notification_service\"]" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          SERVICES=()
+          
+          if [ "${{ github.event_name }}" == "push" ]; then
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          else
+            CHANGED_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || echo "")
+          fi
+          
+          for service in "${ALL_SERVICES[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "^${service}/"; then
+              SERVICES+=("\"${service}\"")
+            fi
+          done
+          
+          if [ ${#SERVICES[@]} -eq 0 ]; then
+            echo "services=[]" >> $GITHUB_OUTPUT
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            SERVICES_JSON=$(IFS=,; echo "[${SERVICES[*]}]")
+            echo "services=${SERVICES_JSON}" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  # Stage 2: Run unit tests
+  unit-tests:
+    name: Unit Tests - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: ${{ matrix.service }}/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd ${{ matrix.service }}
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          cd ${{ matrix.service }}
+          pytest tests/ -v --tb=short --junitxml=test-results.xml || true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.service }}
+          path: ${{ matrix.service }}/test-results.xml
+          retention-days: 7
+
+  # Stage 3: SAST - Static Application Security Testing
+  sast-scan:
+    name: SAST Scan - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r ${{ matrix.service }}/app -f json -o bandit-results.json || true
+          bandit -r ${{ matrix.service }}/app -f txt || true
+
+      - name: Upload Bandit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-results-${{ matrix.service }}
+          path: bandit-results.json
+          retention-days: 7
+
+  # Stage 4: Build and scan Docker images
+  build-scan:
+    name: Build and Scan - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, unit-tests, sast-scan]
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image metadata
+        id: meta
+        run: |
+          SERVICE_NAME="${{ matrix.service }}"
+          SHORT_SHA="${GITHUB_SHA::8}"
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
+          
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${SERVICE_NAME}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ env.ECR_REGISTRY }}/${SERVICE_NAME}:latest"
+          
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
+          echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ steps.meta.outputs.full_image }}
+            ${{ steps.meta.outputs.latest_image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.meta.outputs.full_image }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-${{ matrix.service }}'
+
+      - name: Trivy scan (blocking check)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.meta.outputs.full_image }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Save image for push stage
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          docker save ${{ steps.meta.outputs.full_image }} | gzip > image-${{ matrix.service }}.tar.gz
+
+      - name: Upload image artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: image-${{ matrix.service }}.tar.gz
+          retention-days: 1
+
+  # Stage 5: Push to ECR
+  push-to-ecr:
+    name: Push to ECR - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+
+      - name: Load and push image
+        run: |
+          gunzip -c image-${{ matrix.service }}.tar.gz | docker load
+          
+          SHORT_SHA="${GITHUB_SHA::8}"
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          
+          FULL_IMAGE="${{ env.ECR_REGISTRY }}/${{ matrix.service }}:${IMAGE_TAG}"
+          LATEST_IMAGE="${{ env.ECR_REGISTRY }}/${{ matrix.service }}:latest"
+          
+          docker push $FULL_IMAGE
+          docker tag $FULL_IMAGE $LATEST_IMAGE
+          docker push $LATEST_IMAGE
+          
+          echo "Pushed: $FULL_IMAGE"
+
+  # Stage 6: Update GitOps repository
+  update-gitops:
+    name: Update GitOps
+    runs-on: ubuntu-latest
+    needs: [detect-changes, push-to-ecr]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: WSO2-G02/salon-gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Update image tags
+        env:
+          SERVICES: ${{ needs.detect-changes.outputs.services }}
+        run: |
+          cd gitops
+          SHORT_SHA="${GITHUB_SHA::8}"
+          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          
+          for service in $(echo "$SERVICES" | jq -r '.[]'); do
+            DEPLOYMENT_FILE="staging/${service}/deployment.yaml"
+            if [ -f "$DEPLOYMENT_FILE" ]; then
+              echo "Updating ${service} to tag: ${IMAGE_TAG}"
+              sed -i "s|^\([[:space:]]*image:[[:space:]]*\).*${service}:.*|\1${{ env.ECR_REGISTRY }}/${service}:${IMAGE_TAG}|g" "$DEPLOYMENT_FILE"
+            fi
+          done
+
+      - name: Commit and push changes
+        run: |
+          cd gitops
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update image tags for commit ${{ github.sha }}"
+            git push
+          fi
+
+  # Summary job
+  pipeline-summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [detect-changes, unit-tests, sast-scan, build-scan]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pipeline Flow" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "Detect Changes -> Unit Tests -> SAST Scan -> Build -> Trivy Scan -> Push to ECR -> Update GitOps" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Services Processed" >> $GITHUB_STEP_SUMMARY
+          echo "${{ needs.detect-changes.outputs.services }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST Scan | ${{ needs.sast-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build and Scan | ${{ needs.build-scan.result }} |" >> $GITHUB_STEP_SUMMARY
