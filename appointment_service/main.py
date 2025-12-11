@@ -123,6 +123,33 @@ async def root():
 
 
 # ============================================================================
+# Health Check Endpoint
+# ============================================================================
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Health check endpoint for Kubernetes readiness and liveness probes."""
+    db_healthy = db_manager.health_check()
+    
+    health_status = {
+        "service": settings.SERVICE_NAME,
+        "status": "healthy" if db_healthy else "unhealthy",
+        "checks": {
+            "database": "connected" if db_healthy else "disconnected"
+        }
+    }
+    
+    if not db_healthy:
+        logger.warning(f"Health check failed: Database connection unhealthy")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=health_status
+        )
+    
+    return health_status
+
+
+# ============================================================================
 # Run Application
 # ============================================================================
 
