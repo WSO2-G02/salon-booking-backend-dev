@@ -302,6 +302,7 @@ jobs:
           output: 'trivy-results-${{ matrix.service }}.sarif'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
 
       - name: Upload Trivy SARIF as artifact
         uses: actions/upload-artifact@v4
@@ -316,9 +317,10 @@ jobs:
         with:
           image-ref: ${{ steps.load.outputs.full_image }}
           format: 'table'
-          severity: 'CRITICAL,HIGH'
+          severity: 'CRITICAL'
           ignore-unfixed: true
-          exit-code: '0'  # Warn only - change to '1' for production
+          trivyignores: '.trivyignore'
+          exit-code: '1'  # Fail on CRITICAL vulnerabilities
 
   # ===========================================================================
   # Stage 6: Push to ECR
