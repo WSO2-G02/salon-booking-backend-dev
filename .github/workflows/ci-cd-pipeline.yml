@@ -57,7 +57,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0  # Full history for accurate diff across multiple commits
 
       - name: Detect changed services
         id: changes
@@ -83,8 +83,16 @@ jobs:
           
           SERVICES=()
           
+          # Use github.event.before to capture ALL commits in the push (not just HEAD~1)
           if [ "${{ github.event_name }}" == "push" ]; then
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+            BEFORE_SHA="${{ github.event.before }}"
+            # Handle initial push (no previous commit)
+            if [ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]; then
+              CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
+            else
+              CHANGED_FILES=$(git diff --name-only "$BEFORE_SHA" HEAD 2>/dev/null || echo "")
+            fi
+            echo "Comparing $BEFORE_SHA...HEAD"
           else
             CHANGED_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || echo "")
           fi
