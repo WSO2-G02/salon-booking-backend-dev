@@ -8,6 +8,7 @@ This directory contains technical documentation for the Salon Booking Backend mi
 |----------|-------------|
 | [CI_CD_PIPELINE.md](CI_CD_PIPELINE.md) | CI/CD pipeline architecture, stages, and configuration |
 | [SECURITY.md](SECURITY.md) | Security policies, scanning procedures, and vulnerability management |
+| [HEALTH_CHECK.md](HEALTH_CHECK.md) | Health check endpoint for Kubernetes probes |
 
 ## Diagrams
 
@@ -29,3 +30,8 @@ To view diagrams:
 - [Security Architecture](SECURITY.md#security-architecture)
 - [Security Scanning](SECURITY.md#security-scanning)
 - [Vulnerability Management](SECURITY.md#vulnerability-management)
+
+### Health Check
+- [Endpoint Specification](HEALTH_CHECK.md#endpoint-specification)
+- [Kubernetes Integration](HEALTH_CHECK.md#kubernetes-integration)
+- [Automatic Recovery](HEALTH_CHECK.md#architecture)
