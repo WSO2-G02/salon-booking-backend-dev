@@ -1,6 +1,5 @@
 import os
 import threading
-import json
 from datetime import datetime
 from opensearchpy import OpenSearch
 
