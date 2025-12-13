@@ -148,6 +148,7 @@ jobs:
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true  # Non-critical: don't fail pipeline if quota exceeded
         with:
           name: test-results-${{ matrix.service }}
           path: ${{ matrix.service }}/test-results.xml
@@ -188,16 +189,18 @@ jobs:
       - name: Upload Bandit results
         uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true  # Non-critical: don't fail pipeline if quota exceeded
         with:
           name: bandit-results-${{ matrix.service }}
           path: bandit-results.json
           retention-days: 1
 
   # ===========================================================================
-  # Stage 4: Build Docker Images
+  # Stage 4: Build, Scan & Push Docker Images
   # ===========================================================================
-  build:
-    name: Build - ${{ matrix.service }}
+  # Combined job to avoid artifact storage issues while keeping each step visible
+  build-scan-push:
+    name: Build, Scan & Push - ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [detect-changes, unit-tests, sast-scan]
     if: needs.detect-changes.outputs.has_changes == 'true'
@@ -205,9 +208,15 @@ jobs:
       fail-fast: false
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      security-events: write
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
+      # ------------------------------------------------------------------
+      # Step 1: Setup
+      # ------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -231,8 +240,17 @@ jobs:
           echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
           echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
           echo "service_name=${SERVICE_NAME}" >> $GITHUB_OUTPUT
+          
+          echo "::group::Image Metadata"
+          echo "Service: ${SERVICE_NAME}"
+          echo "Tag: ${IMAGE_TAG}"
+          echo "Full Image: ${FULL_IMAGE}"
+          echo "::endgroup::"
 
-      - name: Build Docker image
+      # ------------------------------------------------------------------
+      # Step 2: Build Docker Image
+      # ------------------------------------------------------------------
+      - name:  Build Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./${{ matrix.service }}
@@ -245,137 +263,72 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Save image for next stages
-        run: |
-          docker save ${{ steps.meta.outputs.full_image }} | gzip > image-${{ matrix.service }}.tar.gz
-
-      - name: Upload image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: image-${{ matrix.service }}
-          path: image-${{ matrix.service }}.tar.gz
-          retention-days: 1
-
-  # ===========================================================================
-  # Stage 5: Trivy Security Scan 
-  # ===========================================================================
-  trivy-scan:
-    name: Trivy Scan - ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    needs: [detect-changes, build]
-    if: needs.detect-changes.outputs.has_changes == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: image-${{ matrix.service }}
-
-      - name: Load Docker image
-        id: load
-        env:
-          ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
-        run: |
-          gunzip -c image-${{ matrix.service }}.tar.gz | docker load
-          
-          SHORT_SHA="${GITHUB_SHA::8}"
-          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
-          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
-          FULL_IMAGE="${ECR_REGISTRY}/${{ matrix.service }}:${IMAGE_TAG}"
-          
-          echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-
-      - name: Run Trivy vulnerability scanner (SARIF)
+      # ------------------------------------------------------------------
+      # Step 3: Trivy Security Scan
+      # ------------------------------------------------------------------
+      - name:  Run Trivy vulnerability scanner (SARIF)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ steps.load.outputs.full_image }}
+          image-ref: ${{ steps.meta.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results-${{ matrix.service }}.sarif'
           severity: 'CRITICAL,HIGH'
           ignore-unfixed: true
           trivyignores: '.trivyignore'
 
-      - name: Upload Trivy SARIF as artifact
+      - name:  Upload Trivy SARIF report
         uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true  # Non-critical: don't fail pipeline if quota exceeded
         with:
           name: trivy-report-${{ matrix.service }}
           path: trivy-results-${{ matrix.service }}.sarif
           retention-days: 1
 
-      - name: Run Trivy vulnerability scanner (Table)
+      - name:  Run Trivy vulnerability scanner (Table)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ steps.load.outputs.full_image }}
+          image-ref: ${{ steps.meta.outputs.full_image }}
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
           trivyignores: '.trivyignore'
           exit-code: '1'  # Fail on CRITICAL vulnerabilities
 
-  # ===========================================================================
-  # Stage 6: Push to ECR
-  # ===========================================================================
-  push-to-ecr:
-    name: Push to ECR - ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    needs: [detect-changes, trivy-scan]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
-    steps:
-      - name: Configure AWS credentials
+      # ------------------------------------------------------------------
+      # Step 4: Push to ECR (only on main branch)
+      # ------------------------------------------------------------------
+      - name:  Configure AWS credentials
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
+      - name:  Login to Amazon ECR
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: image-${{ matrix.service }}
-
-      - name: Load and push image
-        env:
-          ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
+      - name:  Push image to ECR
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
-          gunzip -c image-${{ matrix.service }}.tar.gz | docker load
+          echo "::group::Pushing to ECR"
+          docker push ${{ steps.meta.outputs.full_image }}
+          docker push ${{ steps.meta.outputs.latest_image }}
+          echo "::endgroup::"
           
-          SHORT_SHA="${GITHUB_SHA::8}"
-          TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
-          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
-          
-          FULL_IMAGE="${ECR_REGISTRY}/${{ matrix.service }}:${IMAGE_TAG}"
-          LATEST_IMAGE="${ECR_REGISTRY}/${{ matrix.service }}:latest"
-          
-          docker push $FULL_IMAGE
-          docker tag $FULL_IMAGE $LATEST_IMAGE
-          docker push $LATEST_IMAGE
-          
-          echo "Pushed: $FULL_IMAGE"
+          echo " Successfully pushed:"
+          echo "   - ${{ steps.meta.outputs.full_image }}"
+          echo "   - ${{ steps.meta.outputs.latest_image }}"
 
   # ===========================================================================
-  # Stage 7: Update GitOps Repository
+  # Stage 5: Update GitOps Repository
   # ===========================================================================
   update-gitops:
     name: Update GitOps
     runs-on: ubuntu-latest
-    needs: [detect-changes, push-to-ecr]
+    needs: [detect-changes, build-scan-push]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout GitOps repository
@@ -422,27 +375,125 @@ jobs:
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, unit-tests, sast-scan, build, trivy-scan]
+    needs: [detect-changes, unit-tests, sast-scan, build-scan-push, update-gitops]
     if: always()
+    env:
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Generate summary
         run: |
-          echo "## CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          # ============================================================
+          # Header with Build Info
+          # ============================================================
+          echo "# CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Pipeline Flow" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | [\`${GITHUB_SHA::8}\`](${REPO_URL}/commit/${GITHUB_SHA}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Actor** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "Detect Changes → Unit Tests  → Build → Trivy Scan → Push to ECR → Update GitOps" >> $GITHUB_STEP_SUMMARY
-          echo "              ↘ SAST Scan  ↗" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Pipeline Flow 
+          # ============================================================
+          echo "## Pipeline Flow" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Services Processed" >> $GITHUB_STEP_SUMMARY
-          echo "${{ needs.detect-changes.outputs.services }}" >> $GITHUB_STEP_SUMMARY
+          echo '```mermaid' >> $GITHUB_STEP_SUMMARY
+          echo 'flowchart LR' >> $GITHUB_STEP_SUMMARY
+          echo '    A[Detect Changes] --> B[Unit Tests]' >> $GITHUB_STEP_SUMMARY
+          echo '    A --> C[SAST Scan]' >> $GITHUB_STEP_SUMMARY
+          echo '    B --> D[Build, Scan & Push]' >> $GITHUB_STEP_SUMMARY
+          echo '    C --> D' >> $GITHUB_STEP_SUMMARY
+          echo '    D --> E[Update GitOps]' >> $GITHUB_STEP_SUMMARY
+          echo '    E --> F[ArgoCD Deploy]' >> $GITHUB_STEP_SUMMARY
+          echo '    style A fill:#e1f5fe' >> $GITHUB_STEP_SUMMARY
+          echo '    style D fill:#fff3e0' >> $GITHUB_STEP_SUMMARY
+          echo '    style F fill:#e8f5e9' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
-          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SAST Scan | ${{ needs.sast-scan.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy Scan | ${{ needs.trivy-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Services Processed
+          # ============================================================
+          echo "##  Services Processed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          SERVICES='${{ needs.detect-changes.outputs.services }}'
+          if [ "$SERVICES" == "[]" ] || [ -z "$SERVICES" ]; then
+            echo "> ⚠️ No services were changed in this commit" >> $GITHUB_STEP_SUMMARY
+          else
+            for service in $(echo "$SERVICES" | jq -r '.[]'); do
+              echo "- \`${service}\`" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Job Status Matrix
+          # ============================================================
+          echo "##  Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|:------:|-------------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Function to convert status to emoji
+          get_status_emoji() {
+            case "$1" in
+              success) echo "✅" ;;
+              failure) echo "❌" ;;
+              cancelled) echo "⚪" ;;
+              skipped) echo "⏭️" ;;
+              *) echo "⏳" ;;
+            esac
+          }
+          
+          echo "| Unit Tests | $(get_status_emoji '${{ needs.unit-tests.result }}') ${{ needs.unit-tests.result }} | Pytest with coverage |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST Scan | $(get_status_emoji '${{ needs.sast-scan.result }}') ${{ needs.sast-scan.result }} | Bandit security analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build, Scan & Push | $(get_status_emoji '${{ needs.build-scan-push.result }}') ${{ needs.build-scan-push.result }} | Docker build → Trivy scan → ECR push |" >> $GITHUB_STEP_SUMMARY
+          echo "| Update GitOps | $(get_status_emoji '${{ needs.update-gitops.result }}') ${{ needs.update-gitops.result }} | Deployment manifest update |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Security Reports 
+          # ============================================================
+          echo "##  Security Reports" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Trivy Report | Bandit Report |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|:------------:|:-------------:|" >> $GITHUB_STEP_SUMMARY
+          SERVICES='${{ needs.detect-changes.outputs.services }}'
+          if [ "$SERVICES" != "[]" ] && [ -n "$SERVICES" ]; then
+            for service in $(echo "$SERVICES" | jq -r '.[]'); do
+              echo "| \`${service}\` | [ View](${RUN_URL}#artifacts) | [ View](${RUN_URL}#artifacts) |" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo ">  **Tip:** Click on the artifact links above or go to the [Artifacts section](${RUN_URL}#artifacts) to download detailed reports." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Docker Images
+          # ============================================================
+          echo "##  Docker Images" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          ECR_REGISTRY="${{ needs.detect-changes.outputs.ecr_registry }}"
+          IMAGE_TAG="${GITHUB_SHA::8}-${{ needs.detect-changes.outputs.timestamp }}"
+          echo "| Service | Image | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|-----|" >> $GITHUB_STEP_SUMMARY
+          if [ "$SERVICES" != "[]" ] && [ -n "$SERVICES" ]; then
+            for service in $(echo "$SERVICES" | jq -r '.[]'); do
+              echo "| \`${service}\` | \`${ECR_REGISTRY}/${service}\` | \`${IMAGE_TAG}\` |" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ============================================================
+          # Footer
+          # ============================================================
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo " **Documentation:** [CI/CD Pipeline Guide](${REPO_URL}/blob/main/docs/CI_CD_PIPELINE.md) | [Security Policy](${REPO_URL}/blob/main/docs/SECURITY.md)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Generated by GitHub Actions on $(date -u '+%Y-%m-%d %H:%M:%S UTC')_" >> $GITHUB_STEP_SUMMARY
