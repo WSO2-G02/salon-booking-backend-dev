@@ -276,14 +276,13 @@ jobs:
           ignore-unfixed: true
           trivyignores: '.trivyignore'
 
-      - name:  Upload Trivy SARIF report
-        uses: actions/upload-artifact@v4
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
-        continue-on-error: true  # Non-critical: don't fail pipeline if quota exceeded
+        continue-on-error: true  # Don't fail if upload issues
         with:
-          name: trivy-report-${{ matrix.service }}
-          path: trivy-results-${{ matrix.service }}.sarif
-          retention-days: 1
+          sarif_file: 'trivy-results-${{ matrix.service }}.sarif'
+          category: 'trivy-${{ matrix.service }}'
 
       - name:  Run Trivy vulnerability scanner (Table)
         uses: aquasecurity/trivy-action@0.28.0
@@ -461,16 +460,13 @@ jobs:
           # ============================================================
           echo "##  Security Reports" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Service | Trivy Report | Bandit Report |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|:------------:|:-------------:|" >> $GITHUB_STEP_SUMMARY
-          SERVICES='${{ needs.detect-changes.outputs.services }}'
-          if [ "$SERVICES" != "[]" ] && [ -n "$SERVICES" ]; then
-            for service in $(echo "$SERVICES" | jq -r '.[]'); do
-              echo "| \`${service}\` | [ View](${RUN_URL}#artifacts) | [ View](${RUN_URL}#artifacts) |" >> $GITHUB_STEP_SUMMARY
-            done
-          fi
+          echo "| Report Type | Location | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|:--------:|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trivy Container Scan** | [ Security Tab](${REPO_URL}/security/code-scanning) | CRITICAL & HIGH vulnerabilities |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Bandit SAST** | [ Artifacts](${RUN_URL}#artifacts) | Python security analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Test Results** | [ Artifacts](${RUN_URL}#artifacts) | Pytest coverage reports |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo ">  **Tip:** Click on the artifact links above or go to the [Artifacts section](${RUN_URL}#artifacts) to download detailed reports." >> $GITHUB_STEP_SUMMARY
+          echo ">💡 **Tip:** Trivy findings appear in the repository's **Security → Code scanning** section for tracking and management." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # ============================================================
