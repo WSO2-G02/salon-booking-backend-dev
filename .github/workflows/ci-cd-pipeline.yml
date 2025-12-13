@@ -258,7 +258,7 @@ jobs:
   build-temp:
     name: Build (Temp) - ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: [detect-changes, unit-tests, sast-scan]
+    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan]
     if: needs.detect-changes.outputs.has_changes == 'true'
     strategy:
       fail-fast: false
