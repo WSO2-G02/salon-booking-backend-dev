@@ -522,7 +522,7 @@ flowchart TB
             RA[reports-analytics<br/>Deployment]
         end
 
-        subgraph default Namespace
+        subgraph Monitoring Namespace
             OS[OpenSearch<br/>Logging]
             GF[Grafana<br/>Monitoring]
         end
