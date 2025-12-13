@@ -196,11 +196,62 @@ jobs:
           retention-days: 1
 
   # ===========================================================================
-  # Stage 4: Build, Scan & Push Docker Images
+  # Stage 3b: Secret Scan (Gitleaks)
   # ===========================================================================
-  # Combined job to avoid artifact storage issues while keeping each step visible
-  build-scan-push:
-    name: Build, Scan & Push - ${{ matrix.service }}
+  secret-scan:
+    name: Secret Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Stage 3c: IaC Scan (Checkov)
+  # ===========================================================================
+  iac-scan:
+    name: IaC Scan (Checkov)
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          framework: dockerfile
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+          quiet: true
+
+      - name: Upload Checkov SARIF
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: checkov-results
+          path: results.sarif
+          retention-days: 1
+
+  # ===========================================================================
+  # Stage 4: Build & Push Temporary Image
+  # ===========================================================================
+  build-temp:
+    name: Build (Temp) - ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [detect-changes, unit-tests, sast-scan]
     if: needs.detect-changes.outputs.has_changes == 'true'
@@ -208,20 +259,25 @@ jobs:
       fail-fast: false
       matrix:
         service: ${{ fromJson(needs.detect-changes.outputs.services) }}
-    permissions:
-      contents: read
-      security-events: write
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
+      full_image: ${{ steps.meta.outputs.full_image }}
     steps:
-      # ------------------------------------------------------------------
-      # Step 1: Setup
-      # ------------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Generate image metadata
         id: meta
@@ -232,44 +288,64 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::8}"
           TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           
-          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
+          # Use a temporary tag for scanning
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}-scan"
           FULL_IMAGE="${ECR_REGISTRY}/${SERVICE_NAME}:${IMAGE_TAG}"
-          LATEST_IMAGE="${ECR_REGISTRY}/${SERVICE_NAME}:latest"
           
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "full_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-          echo "latest_image=${LATEST_IMAGE}" >> $GITHUB_OUTPUT
-          echo "service_name=${SERVICE_NAME}" >> $GITHUB_OUTPUT
           
           echo "::group::Image Metadata"
           echo "Service: ${SERVICE_NAME}"
-          echo "Tag: ${IMAGE_TAG}"
-          echo "Full Image: ${FULL_IMAGE}"
+          echo "Temp Tag: ${IMAGE_TAG}"
           echo "::endgroup::"
 
-      # ------------------------------------------------------------------
-      # Step 2: Build Docker Image
-      # ------------------------------------------------------------------
-      - name:  Build Docker image
+      - name: Build and Push Temp Image
         uses: docker/build-push-action@v5
         with:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
-          push: false
-          load: true
-          tags: |
-            ${{ steps.meta.outputs.full_image }}
-            ${{ steps.meta.outputs.latest_image }}
+          push: true
+          tags: ${{ steps.meta.outputs.full_image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ------------------------------------------------------------------
-      # Step 3: Trivy Security Scan
-      # ------------------------------------------------------------------
-      - name:  Run Trivy vulnerability scanner (SARIF)
-        uses: aquasecurity/trivy-action@0.28.0
+  # ===========================================================================
+  # Stage 5: Trivy Security Scan
+  # ===========================================================================
+  trivy-scan:
+    name: Security Scan - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-temp]
+    if: needs.detect-changes.outputs.has_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          image-ref: ${{ steps.meta.outputs.full_image }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Run Trivy vulnerability scanner (SARIF)
+        uses: aquasecurity/trivy-action@0.28.0
+        env:
+          ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
+          IMAGE_TAG: ${{ needs.build-temp.outputs.image_tag }}
+        with:
+          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build-temp.outputs.image_tag }}
           format: 'sarif'
           output: 'trivy-results-${{ matrix.service }}.sarif'
           severity: 'CRITICAL,HIGH'
@@ -279,56 +355,79 @@ jobs:
       - name: Upload Trivy SARIF report
         uses: actions/upload-artifact@v4
         if: always()
-        continue-on-error: true  # Non-critical: don't fail pipeline if quota exceeded
+        continue-on-error: true
         with:
           name: trivy-report-${{ matrix.service }}
           path: trivy-results-${{ matrix.service }}.sarif
           retention-days: 1
 
-      - name:  Run Trivy vulnerability scanner (Table)
+      - name: Run Trivy vulnerability scanner (Table)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ steps.meta.outputs.full_image }}
+          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build-temp.outputs.image_tag }}
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
           trivyignores: '.trivyignore'
-          exit-code: '1'  # Fail on CRITICAL vulnerabilities
+          exit-code: '1'
 
-      # ------------------------------------------------------------------
-      # Step 4: Push to ECR (only on main branch)
-      # ------------------------------------------------------------------
-      - name:  Configure AWS credentials
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+  # ===========================================================================
+  # Stage 6: Promote & Push Final Image
+  # ===========================================================================
+  promote-push:
+    name: Promote & Push - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [detect-changes, build-temp, trivy-scan]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
+    steps:
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name:  Login to Amazon ECR
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name:  Push image to ECR
-        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      - name: Retag and Push Final Image
+        env:
+          ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
+          SERVICE: ${{ matrix.service }}
+          TEMP_TAG: ${{ needs.build-temp.outputs.image_tag }}
+          TIMESTAMP: ${{ needs.detect-changes.outputs.timestamp }}
         run: |
-          echo "::group::Pushing to ECR"
-          docker push ${{ steps.meta.outputs.full_image }}
-          docker push ${{ steps.meta.outputs.latest_image }}
-          echo "::endgroup::"
+          SHORT_SHA="${GITHUB_SHA::8}"
+          FINAL_TAG="${SHORT_SHA}-${TIMESTAMP}"
           
-          echo " Successfully pushed:"
-          echo "   - ${{ steps.meta.outputs.full_image }}"
-          echo "   - ${{ steps.meta.outputs.latest_image }}"
+          echo "Promoting image ${SERVICE}:${TEMP_TAG} to ${FINAL_TAG}"
+          
+          MANIFEST=$(aws ecr batch-get-image --repository-name $SERVICE --image-ids imageTag=$TEMP_TAG --query 'images[].imageManifest' --output text)
+          
+          if [ -z "$MANIFEST" ]; then
+            echo "Error: Could not find source image ${SERVICE}:${TEMP_TAG}"
+            exit 1
+          fi
+          
+          # Tag as final version
+          aws ecr put-image --repository-name $SERVICE --image-tag $FINAL_TAG --image-manifest "$MANIFEST"
+          
+          # Tag as latest
+          aws ecr put-image --repository-name $SERVICE --image-tag latest --image-manifest "$MANIFEST"
+          
+          echo "Successfully promoted to ${FINAL_TAG} and latest"
 
   # ===========================================================================
-  # Stage 5: Update GitOps Repository
+  # Stage 7: Update GitOps Repository
   # ===========================================================================
   update-gitops:
     name: Update GitOps
     runs-on: ubuntu-latest
-    needs: [detect-changes, build-scan-push]
+    needs: [detect-changes, promote-push]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout GitOps repository
@@ -375,7 +474,7 @@ jobs:
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, unit-tests, sast-scan, build-scan-push, update-gitops]
+    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan, build-temp, trivy-scan, promote-push, update-gitops]
     if: always()
     env:
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -406,13 +505,20 @@ jobs:
           echo 'flowchart LR' >> $GITHUB_STEP_SUMMARY
           echo '    A[Detect Changes] --> B[Unit Tests]' >> $GITHUB_STEP_SUMMARY
           echo '    A --> C[SAST Scan]' >> $GITHUB_STEP_SUMMARY
-          echo '    B --> D[Build, Scan & Push]' >> $GITHUB_STEP_SUMMARY
+          echo '    A --> S[Secret Scan]' >> $GITHUB_STEP_SUMMARY
+          echo '    A --> I[IaC Scan]' >> $GITHUB_STEP_SUMMARY
+          echo '    B --> D[Build Temp]' >> $GITHUB_STEP_SUMMARY
           echo '    C --> D' >> $GITHUB_STEP_SUMMARY
-          echo '    D --> E[Update GitOps]' >> $GITHUB_STEP_SUMMARY
-          echo '    E --> F[ArgoCD Deploy]' >> $GITHUB_STEP_SUMMARY
+          echo '    S --> D' >> $GITHUB_STEP_SUMMARY
+          echo '    I --> D' >> $GITHUB_STEP_SUMMARY
+          echo '    D --> E[Trivy Scan]' >> $GITHUB_STEP_SUMMARY
+          echo '    E --> F[Promote & Push]' >> $GITHUB_STEP_SUMMARY
+          echo '    F --> G[Update GitOps]' >> $GITHUB_STEP_SUMMARY
+          echo '    G --> H[ArgoCD Deploy]' >> $GITHUB_STEP_SUMMARY
           echo '    style A fill:#e1f5fe' >> $GITHUB_STEP_SUMMARY
           echo '    style D fill:#fff3e0' >> $GITHUB_STEP_SUMMARY
-          echo '    style F fill:#e8f5e9' >> $GITHUB_STEP_SUMMARY
+          echo '    style E fill:#ffebee' >> $GITHUB_STEP_SUMMARY
+          echo '    style H fill:#e8f5e9' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -452,7 +558,11 @@ jobs:
           
           echo "| Unit Tests | $(get_status_emoji '${{ needs.unit-tests.result }}') ${{ needs.unit-tests.result }} | Pytest with coverage |" >> $GITHUB_STEP_SUMMARY
           echo "| SAST Scan | $(get_status_emoji '${{ needs.sast-scan.result }}') ${{ needs.sast-scan.result }} | Bandit security analysis |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build, Scan & Push | $(get_status_emoji '${{ needs.build-scan-push.result }}') ${{ needs.build-scan-push.result }} | Docker build → Trivy scan → ECR push |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scan | $(get_status_emoji '${{ needs.secret-scan.result }}') ${{ needs.secret-scan.result }} | Gitleaks secret detection |" >> $GITHUB_STEP_SUMMARY
+          echo "| IaC Scan | $(get_status_emoji '${{ needs.iac-scan.result }}') ${{ needs.iac-scan.result }} | Checkov Dockerfile/Config scan |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Temp | $(get_status_emoji '${{ needs.build-temp.result }}') ${{ needs.build-temp.result }} | Build & Push temp image |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy Scan | $(get_status_emoji '${{ needs.trivy-scan.result }}') ${{ needs.trivy-scan.result }} | Container vulnerability scan |" >> $GITHUB_STEP_SUMMARY
+          echo "| Promote & Push | $(get_status_emoji '${{ needs.promote-push.result }}') ${{ needs.promote-push.result }} | Retag temp → final & push |" >> $GITHUB_STEP_SUMMARY
           echo "| Update GitOps | $(get_status_emoji '${{ needs.update-gitops.result }}') ${{ needs.update-gitops.result }} | Deployment manifest update |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -463,7 +573,9 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Report Type | Description |" >> $GITHUB_STEP_SUMMARY
           echo "|-------------|-------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Trivy Container Scan** | Scans Docker images for CRITICAL & HIGH CVEs (see logs in Build, Scan & Push job) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trivy Container Scan** | Scans Docker images for CRITICAL & HIGH CVEs (see logs in Trivy Scan job) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Gitleaks Secret Scan** | Scans git history for leaked credentials (see logs in Secret Scan job) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Checkov IaC Scan** | Scans Dockerfiles for misconfigurations ([ Download from Artifacts](${RUN_URL}#artifacts)) |" >> $GITHUB_STEP_SUMMARY
           echo "| **Bandit SAST** | Python code security analysis ([ Download from Artifacts](${RUN_URL}#artifacts)) |" >> $GITHUB_STEP_SUMMARY
           echo "| **Test Results** | Pytest coverage reports ([ Download from Artifacts](${RUN_URL}#artifacts)) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

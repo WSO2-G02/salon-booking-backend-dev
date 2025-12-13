@@ -23,6 +23,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire project
 COPY . .
 
+# Create a non-root user and group to run the application
+# This fixes the "Running as Root" security vulnerability
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser && \
+    chown -R appuser:appgroup /app
+
+# Switch to the non-root user
+USER appuser
+
 # Expose FastAPI port
 EXPOSE 8004
 
