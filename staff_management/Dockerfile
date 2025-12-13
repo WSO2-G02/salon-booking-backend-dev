@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
 # Install system dependencies (optional but recommended)
-RUN apt-get update && apt-get install -y build-essential && apt-get clean
+RUN apt-get update && apt-get install -y build-essential curl && apt-get clean
 
 # Upgrade pip to fix CVE-2025-8869
 RUN pip install --upgrade pip
@@ -33,6 +33,10 @@ USER appuser
 
 # Expose FastAPI port
 EXPOSE 8003
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8003/health || exit 1
 
 # Start FastAPI server
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003"]
