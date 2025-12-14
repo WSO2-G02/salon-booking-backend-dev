@@ -154,7 +154,7 @@ class ReportsAnalyticsCustomer(HttpUser):
     @task(1)
     def generate_report(self):
         """Heavy analytics query"""
-        with self.client.get("/api/v1/analytics/daily", catch_response=True) as response:
+        with self.client.get("/api/v1/analytics/revenue/daily", catch_response=True) as response:
             if response.status_code in [200, 401, 403]:
                 response.success()
             else:
