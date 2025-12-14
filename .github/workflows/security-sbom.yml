@@ -1,0 +1,64 @@
+name: Generate SBOM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly on Mondays at 3 AM UTC
+    - cron: '0 3 * * 1'
+
+env:
+  AWS_REGION: eu-north-1
+  AWS_ACCOUNT_ID: '024955634588'
+
+jobs:
+  generate-sbom:
+    name: Generate SBOM - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - user_service
+          - appointment_service
+          - staff_management
+          - service_management
+          - reports_analytics
+          - notification_service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.service }}:latest
+          artifact-name: sbom-${{ matrix.service }}.spdx.json
+          output-file: sbom-${{ matrix.service }}.spdx.json
+          format: spdx-json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.service }}
+          path: sbom-${{ matrix.service }}.spdx.json
+          retention-days: 90
+
+      - name: Scan SBOM for vulnerabilities
+        uses: anchore/scan-action@v4
+        with:
+          sbom: sbom-${{ matrix.service }}.spdx.json
+          fail-build: false
+          severity-cutoff: critical
