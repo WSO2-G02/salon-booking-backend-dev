@@ -37,7 +37,7 @@ on:
           - notification_service
 
 env:
-  AWS_REGION: eu-north-1
+  AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: '024955634588'
   PYTHON_VERSION: '3.12'
 

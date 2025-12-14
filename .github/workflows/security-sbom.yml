@@ -9,7 +9,7 @@ on:
     - cron: '0 3 * * 1'
 
 env:
-  AWS_REGION: eu-north-1
+  AWS_REGION: us-east-1
   AWS_ACCOUNT_ID: '024955634588'
 
 jobs:
