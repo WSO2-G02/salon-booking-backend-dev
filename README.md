@@ -586,3 +586,4 @@ sequenceDiagram
 
 For detailed security guidelines see [docs/SECURITY.md](docs/SECURITY.md).
 
+# Trigger CI/CD
