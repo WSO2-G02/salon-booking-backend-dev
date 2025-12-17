@@ -142,6 +142,14 @@ jobs:
 
       - name: Run tests
         id: pytest
+        env:
+          # Test environment variables (dummy values for CI testing)
+          JWT_SECRET_KEY: "test-secret-key-for-ci-testing-only"
+          DB_HOST: "localhost"
+          DB_USER: "test_user"
+          DB_PASSWORD: "test_password"
+          DB_NAME: "test_db"
+          DB_PORT: "5432"
         run: |
           cd ${{ matrix.service }}
           
@@ -439,7 +447,7 @@ jobs:
       - name: Add Trivy summary
         if: always()
         run: |
-          echo "## 🔒 Security Scan - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "##  Security Scan - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -545,7 +553,7 @@ jobs:
       - name: Wait for ArgoCD sync and verify deployment
         id: wait
         run: |
-          echo "## 🔄 Waiting for Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "##  Waiting for Staging Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Services to check based on what was changed
@@ -571,7 +579,7 @@ jobs:
           HEALTH_ENDPOINTS["reports_analytics"]="/api/reports/health"
           
           # Initial wait for ArgoCD to detect GitOps change
-          echo "⏳ Waiting 30s for ArgoCD to detect GitOps update..."
+          echo " Waiting 30s for ArgoCD to detect GitOps update..."
           sleep 30
           
           ELAPSED=30
@@ -756,7 +764,7 @@ jobs:
       - name: Performance test summary
         if: always()
         run: |
-          echo "## 🚀 Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "##  Performance Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Target:** \`${{ env.TARGET_URL }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Duration:** 2 minutes | **Users:** 30 | **Spawn Rate:** 10/s" >> $GITHUB_STEP_SUMMARY
