@@ -819,6 +819,7 @@ jobs:
           cmd_options: '-a'
           allow_issue_writing: true
           fail_action: false
+          artifact_name: ''  # Disable artifact upload (we handle it separately)
 
       - name: DAST scan summary
         if: always()
