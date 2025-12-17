@@ -1,0 +1,29 @@
+# Gitleaks configuration for salon-booking-backend
+# Ignore test/dummy values used in CI/CD workflows
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "ignore-test-env-vars"
+description = "Ignore test environment variables in CI/CD workflows"
+regex = '''(test_password|test_user|test-secret-key|test_db)'''
+path = '''\.github/workflows/.*\.yml$'''
+
+[allowlist]
+description = "Allowlist for known false positives"
+paths = [
+  '''\.github/workflows/ci-cd-pipeline\.yml''',
+]
+
+# Allow test values
+regexes = [
+  '''test-secret-key-for-ci-testing-only''',
+  '''test_password''',
+  '''test_user''',
+  '''test_db''',
+]
+
+# Allow dummy/example values
+[[allowlist.regexes]]
+regex = '''(example|dummy|test|sample)'''
