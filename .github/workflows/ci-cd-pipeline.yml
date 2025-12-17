@@ -141,9 +141,30 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        id: pytest
         run: |
           cd ${{ matrix.service }}
-          pytest tests/ -v --tb=short --junitxml=test-results.xml || true
+          pytest tests/ -v --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt || true
+          
+          # Parse test results for summary
+          PASSED=$(grep -oP '\d+(?= passed)' test-output.txt | head -1 || echo "0")
+          FAILED=$(grep -oP '\d+(?= failed)' test-output.txt | head -1 || echo "0")
+          SKIPPED=$(grep -oP '\d+(?= skipped)' test-output.txt | head -1 || echo "0")
+          
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
+
+      - name: Add test summary
+        if: always()
+        run: |
+          echo "## 🧪 Unit Tests - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ✅ Passed | ${{ steps.pytest.outputs.passed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Failed | ${{ steps.pytest.outputs.failed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⏭️ Skipped | ${{ steps.pytest.outputs.skipped }} |" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -293,7 +314,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::8}"
           TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           
-          # Use final tag directly (no more temporary scan tag)
+          # Use final tag directly (no temporary scan tag)
           IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           FULL_IMAGE="${ECR_REGISTRY}/${SERVICE_NAME}:${IMAGE_TAG}"
           
@@ -369,14 +390,56 @@ jobs:
           retention-days: 1
 
       - name: Run Trivy vulnerability scanner (Table)
+        id: trivy
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build.outputs.image_tag }}
           format: 'table'
-          severity: 'CRITICAL'
+          output: 'trivy-table-${{ matrix.service }}.txt'
+          severity: 'CRITICAL,HIGH,MEDIUM'
           ignore-unfixed: true
           trivyignores: '.trivyignore'
-          exit-code: '1'
+          exit-code: '0'
+
+      - name: Add Trivy summary
+        if: always()
+        run: |
+          echo "## 🔒 Security Scan - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "trivy-table-${{ matrix.service }}.txt" ]; then
+            CRITICAL=$(grep -c "CRITICAL" trivy-table-${{ matrix.service }}.txt 2>/dev/null || echo "0")
+            HIGH=$(grep -c "HIGH" trivy-table-${{ matrix.service }}.txt 2>/dev/null || echo "0")
+            MEDIUM=$(grep -c "MEDIUM" trivy-table-${{ matrix.service }}.txt 2>/dev/null || echo "0")
+            
+            echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| 🔴 Critical | $CRITICAL |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟠 High | $HIGH |" >> $GITHUB_STEP_SUMMARY
+            echo "| 🟡 Medium | $MEDIUM |" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "$CRITICAL" -gt "0" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ **Critical vulnerabilities found!**" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "✅ **No critical vulnerabilities**" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "✅ No vulnerabilities detected" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Fail on critical vulnerabilities
+        run: |
+          if [ -f "trivy-table-${{ matrix.service }}.txt" ]; then
+            CRITICAL=$(grep -c "CRITICAL" trivy-table-${{ matrix.service }}.txt 2>/dev/null || echo "0")
+            if [ "$CRITICAL" -gt "0" ]; then
+              echo "::error::Critical vulnerabilities found in ${{ matrix.service }}"
+              exit 1
+            fi
+          fi
 
   # ===========================================================================
   # Stage 6: Update GitOps Repository
@@ -426,12 +489,305 @@ jobs:
           fi
 
   # ===========================================================================
+  # Stage 7: Wait for ArgoCD Sync (Staging Deployment)
+  # ===========================================================================
+  wait-for-staging:
+    name: Wait for Staging Deployment
+    runs-on: ubuntu-latest
+    needs: [detect-changes, update-gitops]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    env:
+      STAGING_URL: https://staging.aurora-glam.com
+      MAX_WAIT_SECONDS: 180
+      CHECK_INTERVAL: 15
+    steps:
+      - name: Wait for ArgoCD sync and verify deployment
+        id: wait
+        run: |
+          echo "## 🔄 Waiting for Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Services to check based on what was changed
+          SERVICES='${{ needs.detect-changes.outputs.services }}'
+          
+          # Map service names to health endpoints
+          declare -A HEALTH_ENDPOINTS
+          HEALTH_ENDPOINTS["user_service"]="/api/users/health"
+          HEALTH_ENDPOINTS["appointment_service"]="/api/appointments/health"
+          HEALTH_ENDPOINTS["service_management"]="/api/services/health"
+          HEALTH_ENDPOINTS["staff_management"]="/api/staff/health"
+          HEALTH_ENDPOINTS["notification_service"]="/api/notifications/health"
+          HEALTH_ENDPOINTS["reports_analytics"]="/api/reports/health"
+          
+          # Initial wait for ArgoCD to detect GitOps change
+          echo "⏳ Waiting 30s for ArgoCD to detect GitOps update..."
+          sleep 30
+          
+          ELAPSED=30
+          ALL_HEALTHY=false
+          ATTEMPT=1
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Polling health endpoints (max ${MAX_WAIT_SECONDS}s)...**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          while [ $ELAPSED -lt $MAX_WAIT_SECONDS ]; do
+            echo "Attempt $ATTEMPT (${ELAPSED}s elapsed)..."
+            ALL_HEALTHY=true
+            
+            # Check each changed service
+            for service in $(echo "$SERVICES" | jq -r '.[]' 2>/dev/null); do
+              ENDPOINT="${HEALTH_ENDPOINTS[$service]}"
+              if [ -n "$ENDPOINT" ]; then
+                FULL_URL="${STAGING_URL}${ENDPOINT}"
+                
+                if curl -sf "$FULL_URL" --max-time 5 > /dev/null 2>&1; then
+                  echo "  ✅ $service is healthy"
+                else
+                  echo "   $service not ready yet"
+                  ALL_HEALTHY=false
+                fi
+              fi
+            done
+            
+            if [ "$ALL_HEALTHY" = true ]; then
+              echo ""
+              echo "✅ All services are healthy!"
+              echo "deployment_ready=true" >> $GITHUB_OUTPUT
+              break
+            fi
+            
+            sleep $CHECK_INTERVAL
+            ELAPSED=$((ELAPSED + CHECK_INTERVAL))
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+          
+          if [ "$ALL_HEALTHY" = false ]; then
+            echo "::warning::Not all services healthy after ${MAX_WAIT_SECONDS}s, proceeding anyway"
+            echo "deployment_ready=partial" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Final health check summary
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Final Health Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          ENDPOINTS=(
+            "user_service|/api/users/health"
+            "appointment_service|/api/appointments/health"
+            "service_management|/api/services/health"
+            "staff_management|/api/staff/health"
+            "notification_service|/api/notifications/health"
+            "reports_analytics|/api/reports/health"
+          )
+          
+          echo "| Service | Endpoint | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for entry in "${ENDPOINTS[@]}"; do
+            SERVICE=$(echo $entry | cut -d'|' -f1)
+            ENDPOINT=$(echo $entry | cut -d'|' -f2)
+            FULL_URL="https://staging.aurora-glam.com${ENDPOINT}"
+            
+            if curl -sf "$FULL_URL" --max-time 5 > /dev/null 2>&1; then
+              echo "| $SERVICE | $ENDPOINT | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $SERVICE | $ENDPOINT | ⚠️ Unavailable |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployment Status:** \`${{ steps.wait.outputs.deployment_ready }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Stage 8: Performance Testing (Locust) - Automated Smoke Test
+  # ===========================================================================
+  performance-test:
+    name: Performance Test (Staging)
+    runs-on: ubuntu-latest
+    needs: [wait-for-staging]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    env:
+      TARGET_URL: https://staging.aurora-glam.com
+      MAX_P95_LATENCY_MS: 500
+      MAX_ERROR_RATE: 1
+      MAX_AVG_LATENCY_MS: 200
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Locust
+        run: pip install locust
+
+      - name: Create Locust test file
+        run: |
+          mkdir -p performance_tests
+          cat > performance_tests/locustfile.py << 'EOF'
+          from locust import HttpUser, task, between
+          
+          class SalonUser(HttpUser):
+              wait_time = between(1, 3)
+              
+              @task(3)
+              def health_check(self):
+                  self.client.get("/api/users/health")
+              
+              @task(2)
+              def get_services(self):
+                  self.client.get("/api/services/")
+              
+              @task(1)
+              def get_staff(self):
+                  self.client.get("/api/staff/")
+          EOF
+
+      - name: Run Locust smoke test (2 minutes)
+        id: locust
+        run: |
+          echo " Running 2-minute smoke test against staging..."
+          
+          locust -f performance_tests/locustfile.py \
+            --host=${{ env.TARGET_URL }} \
+            --users=30 \
+            --spawn-rate=10 \
+            --run-time=2m \
+            --headless \
+            --csv=locust_results \
+            --html=locust_report.html \
+            2>&1 | tee locust_output.txt || true
+          
+          # Parse results
+          if [ -f "locust_results_stats.csv" ]; then
+            AVG_RESPONSE=$(tail -1 locust_results_stats.csv | cut -d',' -f6 || echo "0")
+            P95_RESPONSE=$(tail -1 locust_results_stats.csv | cut -d',' -f10 || echo "0")
+            FAILURE_COUNT=$(tail -1 locust_results_stats.csv | cut -d',' -f4 || echo "0")
+            REQUEST_COUNT=$(tail -1 locust_results_stats.csv | cut -d',' -f3 || echo "1")
+            
+            # Calculate error rate
+            if [ "$REQUEST_COUNT" -gt 0 ]; then
+              ERROR_RATE=$(awk "BEGIN {printf \"%.2f\", ($FAILURE_COUNT / $REQUEST_COUNT) * 100}")
+            else
+              ERROR_RATE="0"
+            fi
+            
+            echo "avg_response=$AVG_RESPONSE" >> $GITHUB_OUTPUT
+            echo "p95_response=$P95_RESPONSE" >> $GITHUB_OUTPUT
+            echo "error_rate=$ERROR_RATE" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Performance test summary
+        if: always()
+        run: |
+          echo "## 🚀 Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`${{ env.TARGET_URL }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Duration:** 2 minutes | **Users:** 30 | **Spawn Rate:** 10/s" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          AVG="${{ steps.locust.outputs.avg_response }}"
+          P95="${{ steps.locust.outputs.p95_response }}"
+          ERR="${{ steps.locust.outputs.error_rate }}"
+          
+          echo "| Metric | Value | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Avg latency check
+          if [ -n "$AVG" ] && [ $(echo "$AVG < ${{ env.MAX_AVG_LATENCY_MS }}" | bc -l) -eq 1 ]; then
+            echo "| Avg Response Time | ${AVG}ms | <${{ env.MAX_AVG_LATENCY_MS }}ms | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Avg Response Time | ${AVG:-N/A}ms | <${{ env.MAX_AVG_LATENCY_MS }}ms | ⚠️ WARN |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # P95 check
+          if [ -n "$P95" ] && [ $(echo "$P95 < ${{ env.MAX_P95_LATENCY_MS }}" | bc -l) -eq 1 ]; then
+            echo "| P95 Response Time | ${P95}ms | <${{ env.MAX_P95_LATENCY_MS }}ms | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| P95 Response Time | ${P95:-N/A}ms | <${{ env.MAX_P95_LATENCY_MS }}ms | ⚠️ WARN |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Error rate check
+          if [ -n "$ERR" ] && [ $(echo "$ERR < ${{ env.MAX_ERROR_RATE }}" | bc -l) -eq 1 ]; then
+            echo "| Error Rate | ${ERR}% | <${{ env.MAX_ERROR_RATE }}% | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Error Rate | ${ERR:-N/A}% | <${{ env.MAX_ERROR_RATE }}% | ⚠️ WARN |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Locust report
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: locust-report
+          path: locust_report.html
+          retention-days: 7
+
+  # ===========================================================================
+  # Stage 9: DAST Security Scan (OWASP ZAP) - Automated Baseline
+  # ===========================================================================
+  dast-scan:
+    name: DAST Scan (Staging)
+    runs-on: ubuntu-latest
+    needs: [wait-for-staging]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: read
+      issues: write
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create ZAP rules file
+        run: |
+          mkdir -p .zap
+          cat > .zap/rules.tsv << 'EOF'
+          10038	IGNORE	(Content Security Policy Header Not Set)
+          10021	IGNORE	(X-Content-Type-Options Header Missing)
+          EOF
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'https://staging.aurora-glam.com'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          allow_issue_writing: true
+          fail_action: false
+
+      - name: DAST scan summary
+        if: always()
+        run: |
+          echo "##  DAST Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** \`https://staging.aurora-glam.com\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Type:** Baseline (Passive)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo " Check the **Artifacts** section for the full ZAP report." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo ">  For a deeper scan, manually trigger the full DAST workflow." >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: zap-baseline-report
+          path: report_html.html
+          retention-days: 30
+
+  # ===========================================================================
   # Pipeline Summary
   # ===========================================================================
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan, build, trivy-scan, update-gitops]
+    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan, build, trivy-scan, update-gitops, performance-test, dast-scan]
     if: always()
     env:
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -464,18 +820,23 @@ jobs:
           echo '    A --> C[SAST Scan]' >> $GITHUB_STEP_SUMMARY
           echo '    A --> S[Secret Scan]' >> $GITHUB_STEP_SUMMARY
           echo '    A --> I[IaC Scan]' >> $GITHUB_STEP_SUMMARY
-          echo '    B --> D[Build Temp]' >> $GITHUB_STEP_SUMMARY
+          echo '    B --> D[Build Image]' >> $GITHUB_STEP_SUMMARY
           echo '    C --> D' >> $GITHUB_STEP_SUMMARY
           echo '    S --> D' >> $GITHUB_STEP_SUMMARY
           echo '    I --> D' >> $GITHUB_STEP_SUMMARY
           echo '    D --> E[Trivy Scan]' >> $GITHUB_STEP_SUMMARY
-          echo '    E --> F[Promote & Push]' >> $GITHUB_STEP_SUMMARY
-          echo '    F --> G[Update GitOps]' >> $GITHUB_STEP_SUMMARY
-          echo '    G --> H[ArgoCD Deploy]' >> $GITHUB_STEP_SUMMARY
+          echo '    E --> G[Update GitOps]' >> $GITHUB_STEP_SUMMARY
+          echo '    G --> H[ArgoCD Staging]' >> $GITHUB_STEP_SUMMARY
+          echo '    H --> L[Load Test]' >> $GITHUB_STEP_SUMMARY
+          echo '    H --> Z[DAST Scan]' >> $GITHUB_STEP_SUMMARY
+          echo '    L --> P[Production Ready]' >> $GITHUB_STEP_SUMMARY
+          echo '    Z --> P' >> $GITHUB_STEP_SUMMARY
           echo '    style A fill:#e1f5fe' >> $GITHUB_STEP_SUMMARY
           echo '    style D fill:#fff3e0' >> $GITHUB_STEP_SUMMARY
           echo '    style E fill:#ffebee' >> $GITHUB_STEP_SUMMARY
-          echo '    style H fill:#e8f5e9' >> $GITHUB_STEP_SUMMARY
+          echo '    style L fill:#e8f5e9' >> $GITHUB_STEP_SUMMARY
+          echo '    style Z fill:#fce4ec' >> $GITHUB_STEP_SUMMARY
+          echo '    style P fill:#c8e6c9' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -517,9 +878,11 @@ jobs:
           echo "| SAST Scan | $(get_status_emoji '${{ needs.sast-scan.result }}') ${{ needs.sast-scan.result }} | Bandit security analysis |" >> $GITHUB_STEP_SUMMARY
           echo "| Secret Scan | $(get_status_emoji '${{ needs.secret-scan.result }}') ${{ needs.secret-scan.result }} | Gitleaks secret detection |" >> $GITHUB_STEP_SUMMARY
           echo "| IaC Scan | $(get_status_emoji '${{ needs.iac-scan.result }}') ${{ needs.iac-scan.result }} | Checkov Dockerfile/Config scan |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | $(get_status_emoji '${{ needs.build.result }}') ${{ needs.build.result }} | Build & Push image |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | $(get_status_emoji '${{ needs.build.result }}') ${{ needs.build.result }} | Build & Push image to ECR |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy Scan | $(get_status_emoji '${{ needs.trivy-scan.result }}') ${{ needs.trivy-scan.result }} | Container vulnerability scan |" >> $GITHUB_STEP_SUMMARY
           echo "| Update GitOps | $(get_status_emoji '${{ needs.update-gitops.result }}') ${{ needs.update-gitops.result }} | Deployment manifest update |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Performance Test** | $(get_status_emoji '${{ needs.performance-test.result }}') ${{ needs.performance-test.result }} | Locust load test (2min) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **DAST Scan** | $(get_status_emoji '${{ needs.dast-scan.result }}') ${{ needs.dast-scan.result }} | OWASP ZAP baseline scan |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           # ============================================================

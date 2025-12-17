@@ -1,0 +1,35 @@
+# ZAP Scan Rules Configuration
+# Format: rule_id	action	description
+# Actions: IGNORE, WARN, FAIL
+
+# Informational findings - usually safe to ignore
+10021	IGNORE	X-Content-Type-Options Header Missing
+10036	IGNORE	Server Leaks Version Information
+10037	IGNORE	Server Leaks Information via "X-Powered-By"
+10055	IGNORE	CSP: Wildcard Directive
+
+# Warnings - should be reviewed but not fail build
+10010	WARN	Cookie Without Secure Flag
+10011	WARN	Cookie Without HttpOnly Flag
+10015	WARN	Incomplete or No Cache-control
+10017	WARN	Cross-Domain JavaScript Source File Inclusion
+10020	WARN	X-Frame-Options Header Not Set
+10038	WARN	Content Security Policy (CSP) Header Not Set
+
+# Critical findings - should fail the build
+40012	FAIL	Cross Site Scripting (Reflected)
+40014	FAIL	Cross Site Scripting (Persistent)
+40016	FAIL	Cross Site Scripting (DOM Based)
+40018	FAIL	SQL Injection
+40019	FAIL	SQL Injection - MySQL
+40020	FAIL	SQL Injection - Hypersonic SQL
+40021	FAIL	SQL Injection - Oracle
+40022	FAIL	SQL Injection - PostgreSQL
+90019	FAIL	Server Side Include
+90020	FAIL	Remote OS Command Injection
+90021	FAIL	XPath Injection
+90023	FAIL	XML External Entity Attack
+90024	FAIL	Generic Padding Oracle
+90025	FAIL	Expression Language Injection
+90026	FAIL	SOAP Action Spoofing
+90029	FAIL	SOAP XML Injection

@@ -1,0 +1,268 @@
+# =============================================================================
+# Performance & Load Testing Workflow (Locust)
+# =============================================================================
+#
+# Usage:
+#   Automatic: Triggered on PRs to main
+#   Manual: Actions → "Performance Test (Locust)" → Run workflow
+# =============================================================================
+
+name: Performance Test (Locust)
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_duration:
+        description: 'Test duration'
+        required: true
+        type: choice
+        options:
+          - '2m'   # Quick smoke test
+          - '5m'   # Standard test 
+          - '10m'  # Extended test
+        default: '5m'
+      users:
+        description: 'Number of concurrent users'
+        required: true
+        type: choice
+        options:
+          - '10'   # Light load
+          - '50'   # Normal load
+          - '100'  # Heavy load
+          - '200'  # Stress test
+        default: '50'
+      spawn_rate:
+        description: 'Users spawned per second'
+        required: true
+        type: choice
+        options:
+          - '5'
+          - '10'
+          - '20'
+        default: '10'
+  
+  # Run quick test on PRs to main
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - '**/requirements.txt'
+      - 'docker-compose.yml'
+
+env:
+  # Performance thresholds 
+  MAX_P95_LATENCY_MS: 500    # p95 response time should be under 500ms
+  MAX_ERROR_RATE: 1          # Error rate should be under 1%
+  MAX_AVG_LATENCY_MS: 200    # Average response time under 200ms
+
+jobs:
+  locust-test:
+    name: Load Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set test parameters
+        id: params
+        run: |
+          # Use inputs for manual trigger, defaults for PR
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "duration=2m" >> $GITHUB_OUTPUT
+            echo "users=30" >> $GITHUB_OUTPUT
+            echo "spawn_rate=10" >> $GITHUB_OUTPUT
+            echo "test_type=Quick Smoke Test (PR)" >> $GITHUB_OUTPUT
+          else
+            echo "duration=${{ github.event.inputs.test_duration }}" >> $GITHUB_OUTPUT
+            echo "users=${{ github.event.inputs.users }}" >> $GITHUB_OUTPUT
+            echo "spawn_rate=${{ github.event.inputs.spawn_rate }}" >> $GITHUB_OUTPUT
+            echo "test_type=Manual Load Test" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Locust
+        run: |
+          pip install locust
+
+      - name: Create Docker network
+        run: docker network create salon-network || true
+
+      - name: Start services with Docker Compose
+        run: |
+          # Create minimal .env for testing
+          cat > .env << EOF
+          MYSQL_ROOT_PASSWORD=testpassword
+          MYSQL_DATABASE=salon_test
+          MYSQL_USER=salon_user
+          MYSQL_PASSWORD=testpassword
+          JWT_SECRET_KEY=test-jwt-secret-key-for-ci-testing-only
+          SMTP_HOST=smtp.test.com
+          SMTP_PORT=587
+          SMTP_USER=test@test.com
+          SMTP_PASSWORD=testpassword
+          SMTP_FROM_EMAIL=test@test.com
+          EOF
+          
+          # Start all services
+          docker-compose up -d
+          
+          echo "Waiting for services to be healthy..."
+          sleep 30
+
+      - name: Verify services are running
+        run: |
+          echo "## Service Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | Port | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          SERVICES=("user-service:8001" "service-management:8002" "staff-management:8003" "appointment-service:8004" "notification-service:8005" "reports-analytics:8006")
+          
+          ALL_HEALTHY=true
+          for SERVICE_PORT in "${SERVICES[@]}"; do
+            SERVICE=$(echo $SERVICE_PORT | cut -d: -f1)
+            PORT=$(echo $SERVICE_PORT | cut -d: -f2)
+            
+            if curl -sf http://localhost:$PORT/health > /dev/null 2>&1; then
+              echo "| $SERVICE | $PORT | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $SERVICE | $PORT | ⚠️ Unhealthy |" >> $GITHUB_STEP_SUMMARY
+              ALL_HEALTHY=false
+            fi
+          done
+          
+          if [ "$ALL_HEALTHY" = false ]; then
+            echo "::warning::Some services may not be fully healthy"
+          fi
+
+      - name: Run Locust performance test
+        id: locust
+        run: |
+          echo "## Performance Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Test Type:** ${{ steps.params.outputs.test_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration:** ${{ steps.params.outputs.duration }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Users:** ${{ steps.params.outputs.users }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Spawn Rate:** ${{ steps.params.outputs.spawn_rate }}/sec" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          cd performance_tests
+          
+          # Run Locust in headless mode
+          locust \
+            --headless \
+            --users ${{ steps.params.outputs.users }} \
+            --spawn-rate ${{ steps.params.outputs.spawn_rate }} \
+            --run-time ${{ steps.params.outputs.duration }} \
+            --html=locust-report.html \
+            --csv=locust-results \
+            --only-summary \
+            2>&1 | tee locust-output.txt
+          
+          # Parse results for threshold checking
+          if [ -f locust-results_stats.csv ]; then
+            # Get aggregate stats (last row, Type="Aggregated")
+            AVG_RESPONSE=$(tail -1 locust-results_stats.csv | cut -d',' -f6)
+            P95_RESPONSE=$(tail -1 locust-results_stats.csv | cut -d',' -f12)
+            ERROR_RATE=$(tail -1 locust-results_stats.csv | cut -d',' -f4)
+            RPS=$(tail -1 locust-results_stats.csv | cut -d',' -f10)
+            
+            echo "avg_response=$AVG_RESPONSE" >> $GITHUB_OUTPUT
+            echo "p95_response=$P95_RESPONSE" >> $GITHUB_OUTPUT
+            echo "error_rate=$ERROR_RATE" >> $GITHUB_OUTPUT
+            echo "rps=$RPS" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check performance thresholds
+        id: thresholds
+        run: |
+          cd performance_tests
+          
+          echo "## Performance Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          PASS=true
+          
+          # Parse CSV for metrics
+          if [ -f locust-results_stats.csv ]; then
+            # Extract metrics (handle potential formatting)
+            AVG_MS=$(tail -1 locust-results_stats.csv | cut -d',' -f6 | tr -d ' ')
+            P95_MS=$(tail -1 locust-results_stats.csv | cut -d',' -f12 | tr -d ' ')
+            FAIL_RATIO=$(tail -1 locust-results_stats.csv | cut -d',' -f4 | tr -d ' ')
+            RPS=$(tail -1 locust-results_stats.csv | cut -d',' -f10 | tr -d ' ')
+            TOTAL_REQUESTS=$(tail -1 locust-results_stats.csv | cut -d',' -f3 | tr -d ' ')
+            
+            echo "| Metric | Value | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+            
+            # Check Average Response Time
+            if [ ! -z "$AVG_MS" ] && [ $(echo "$AVG_MS < ${{ env.MAX_AVG_LATENCY_MS }}" | bc -l 2>/dev/null || echo "1") -eq 1 ]; then
+              echo "| Avg Response Time | ${AVG_MS}ms | <${{ env.MAX_AVG_LATENCY_MS }}ms | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Avg Response Time | ${AVG_MS}ms | <${{ env.MAX_AVG_LATENCY_MS }}ms | ❌ FAIL |" >> $GITHUB_STEP_SUMMARY
+              PASS=false
+            fi
+            
+            # Check P95 Response Time
+            if [ ! -z "$P95_MS" ] && [ $(echo "$P95_MS < ${{ env.MAX_P95_LATENCY_MS }}" | bc -l 2>/dev/null || echo "1") -eq 1 ]; then
+              echo "| P95 Response Time | ${P95_MS}ms | <${{ env.MAX_P95_LATENCY_MS }}ms | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| P95 Response Time | ${P95_MS}ms | <${{ env.MAX_P95_LATENCY_MS }}ms | ❌ FAIL |" >> $GITHUB_STEP_SUMMARY
+              PASS=false
+            fi
+            
+            # Check Error Rate
+            if [ ! -z "$FAIL_RATIO" ] && [ $(echo "$FAIL_RATIO < ${{ env.MAX_ERROR_RATE }}" | bc -l 2>/dev/null || echo "1") -eq 1 ]; then
+              echo "| Error Rate | ${FAIL_RATIO}% | <${{ env.MAX_ERROR_RATE }}% | ✅ PASS |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Error Rate | ${FAIL_RATIO}% | <${{ env.MAX_ERROR_RATE }}% | ❌ FAIL |" >> $GITHUB_STEP_SUMMARY
+              PASS=false
+            fi
+            
+            # RPS (informational, no threshold)
+            echo "| Requests/sec | ${RPS} | - | ℹ️ INFO |" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Requests | ${TOTAL_REQUESTS} | - | ℹ️ INFO |" >> $GITHUB_STEP_SUMMARY
+            
+          else
+            echo "⚠️ Could not parse Locust results" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$PASS" = true ]; then
+            echo "### ✅ Performance Test PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "passed=true" >> $GITHUB_OUTPUT
+          else
+            echo "### ❌ Performance Test FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "Performance thresholds not met. Review the report for details." >> $GITHUB_STEP_SUMMARY
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Locust HTML Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: locust-performance-report
+          path: |
+            performance_tests/locust-report.html
+            performance_tests/locust-results*.csv
+            performance_tests/locust-output.txt
+          retention-days: 30
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker-compose down -v || true
+          docker network rm salon-network || true
+
+      - name: Fail if thresholds not met
+        if: steps.thresholds.outputs.passed == 'false' && github.event_name == 'pull_request'
+        run: |
+          echo "::error::Performance thresholds not met. Check the report for details."
+          exit 1
