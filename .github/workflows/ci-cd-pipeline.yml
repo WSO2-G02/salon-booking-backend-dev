@@ -847,6 +847,7 @@ jobs:
           cmd_options: '-a'
           allow_issue_writing: true
           fail_action: false
+          artifact_name: 'zap-scan-report'
 
       - name: DAST scan summary
         if: always()
