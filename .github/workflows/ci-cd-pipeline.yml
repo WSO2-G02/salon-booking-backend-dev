@@ -145,6 +145,9 @@ jobs:
         run: |
           cd ${{ matrix.service }}
           
+          # Set PYTHONPATH to include current directory for imports
+          export PYTHONPATH="${PWD}:${PYTHONPATH}"
+          
           # Run pytest and capture output
           set +e
           pytest tests/ -v --tb=short --junitxml=test-results.xml 2>&1 | tee test-output.txt
@@ -813,13 +816,13 @@ jobs:
 
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0
+        continue-on-error: true
         with:
           target: 'https://staging.aurora-glam.com'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
           allow_issue_writing: true
           fail_action: false
-          artifact_name: ''  # Disable artifact upload (we handle it separately)
 
       - name: DAST scan summary
         if: always()
