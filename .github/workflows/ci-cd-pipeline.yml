@@ -253,10 +253,10 @@ jobs:
           retention-days: 1
 
   # ===========================================================================
-  # Stage 4: Build & Push Temporary Image
+  # Stage 4: Build & Push Image
   # ===========================================================================
-  build-temp:
-    name: Build (Temp) - ${{ matrix.service }}
+  build:
+    name: Build - ${{ matrix.service }}
     runs-on: ubuntu-latest
     needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan]
     if: needs.detect-changes.outputs.has_changes == 'true'
@@ -293,8 +293,8 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::8}"
           TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           
-          # Use a temporary tag for scanning
-          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}-scan"
+          # Use final tag directly (no more temporary scan tag)
+          IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           FULL_IMAGE="${ECR_REGISTRY}/${SERVICE_NAME}:${IMAGE_TAG}"
           
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
@@ -302,16 +302,18 @@ jobs:
           
           echo "::group::Image Metadata"
           echo "Service: ${SERVICE_NAME}"
-          echo "Temp Tag: ${IMAGE_TAG}"
+          echo "Tag: ${IMAGE_TAG}"
           echo "::endgroup::"
 
-      - name: Build and Push Temp Image
+      - name: Build and Push Image
         uses: docker/build-push-action@v5
         with:
           context: ./${{ matrix.service }}
           file: ./${{ matrix.service }}/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.full_image }}
+          tags: |
+            ${{ steps.meta.outputs.full_image }}
+            ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -321,7 +323,7 @@ jobs:
   trivy-scan:
     name: Security Scan - ${{ matrix.service }}
     runs-on: ubuntu-latest
-    needs: [detect-changes, build-temp]
+    needs: [detect-changes, build]
     if: needs.detect-changes.outputs.has_changes == 'true'
     strategy:
       fail-fast: false
@@ -348,9 +350,9 @@ jobs:
         uses: aquasecurity/trivy-action@0.28.0
         env:
           ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
-          IMAGE_TAG: ${{ needs.build-temp.outputs.image_tag }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
         with:
-          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build-temp.outputs.image_tag }}
+          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build.outputs.image_tag }}
           format: 'sarif'
           output: 'trivy-results-${{ matrix.service }}.sarif'
           severity: 'CRITICAL,HIGH'
@@ -369,7 +371,7 @@ jobs:
       - name: Run Trivy vulnerability scanner (Table)
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build-temp.outputs.image_tag }}
+          image-ref: ${{ needs.detect-changes.outputs.ecr_registry }}/${{ matrix.service }}:${{ needs.build.outputs.image_tag }}
           format: 'table'
           severity: 'CRITICAL'
           ignore-unfixed: true
@@ -377,62 +379,12 @@ jobs:
           exit-code: '1'
 
   # ===========================================================================
-  # Stage 6: Promote & Push Final Image
-  # ===========================================================================
-  promote-push:
-    name: Promote & Push - ${{ matrix.service }}
-    runs-on: ubuntu-latest
-    needs: [detect-changes, build-temp, trivy-scan]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJson(needs.detect-changes.outputs.services) }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Retag and Push Final Image
-        env:
-          ECR_REGISTRY: ${{ needs.detect-changes.outputs.ecr_registry }}
-          SERVICE: ${{ matrix.service }}
-          TEMP_TAG: ${{ needs.build-temp.outputs.image_tag }}
-          TIMESTAMP: ${{ needs.detect-changes.outputs.timestamp }}
-        run: |
-          SHORT_SHA="${GITHUB_SHA::8}"
-          FINAL_TAG="${SHORT_SHA}-${TIMESTAMP}"
-          
-          echo "Promoting image ${SERVICE}:${TEMP_TAG} to ${FINAL_TAG}"
-          
-          MANIFEST=$(aws ecr batch-get-image --repository-name $SERVICE --image-ids imageTag=$TEMP_TAG --query 'images[].imageManifest' --output text)
-          
-          if [ -z "$MANIFEST" ]; then
-            echo "Error: Could not find source image ${SERVICE}:${TEMP_TAG}"
-            exit 1
-          fi
-          
-          # Tag as final version
-          aws ecr put-image --repository-name $SERVICE --image-tag $FINAL_TAG --image-manifest "$MANIFEST"
-          
-          # Tag as latest
-          aws ecr put-image --repository-name $SERVICE --image-tag latest --image-manifest "$MANIFEST"
-          
-          echo "Successfully promoted to ${FINAL_TAG} and latest"
-
-  # ===========================================================================
-  # Stage 7: Update GitOps Repository
+  # Stage 6: Update GitOps Repository
   # ===========================================================================
   update-gitops:
     name: Update GitOps
     runs-on: ubuntu-latest
-    needs: [detect-changes, promote-push]
+    needs: [detect-changes, build, trivy-scan]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     steps:
       - name: Checkout GitOps repository
@@ -479,7 +431,7 @@ jobs:
   pipeline-summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan, build-temp, trivy-scan, promote-push, update-gitops]
+    needs: [detect-changes, unit-tests, sast-scan, secret-scan, iac-scan, build, trivy-scan, update-gitops]
     if: always()
     env:
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -565,9 +517,8 @@ jobs:
           echo "| SAST Scan | $(get_status_emoji '${{ needs.sast-scan.result }}') ${{ needs.sast-scan.result }} | Bandit security analysis |" >> $GITHUB_STEP_SUMMARY
           echo "| Secret Scan | $(get_status_emoji '${{ needs.secret-scan.result }}') ${{ needs.secret-scan.result }} | Gitleaks secret detection |" >> $GITHUB_STEP_SUMMARY
           echo "| IaC Scan | $(get_status_emoji '${{ needs.iac-scan.result }}') ${{ needs.iac-scan.result }} | Checkov Dockerfile/Config scan |" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Temp | $(get_status_emoji '${{ needs.build-temp.result }}') ${{ needs.build-temp.result }} | Build & Push temp image |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | $(get_status_emoji '${{ needs.build.result }}') ${{ needs.build.result }} | Build & Push image |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy Scan | $(get_status_emoji '${{ needs.trivy-scan.result }}') ${{ needs.trivy-scan.result }} | Container vulnerability scan |" >> $GITHUB_STEP_SUMMARY
-          echo "| Promote & Push | $(get_status_emoji '${{ needs.promote-push.result }}') ${{ needs.promote-push.result }} | Retag temp → final & push |" >> $GITHUB_STEP_SUMMARY
           echo "| Update GitOps | $(get_status_emoji '${{ needs.update-gitops.result }}') ${{ needs.update-gitops.result }} | Deployment manifest update |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
