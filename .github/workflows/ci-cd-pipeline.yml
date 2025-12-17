@@ -851,7 +851,6 @@ jobs:
           cmd_options: '-a'
           allow_issue_writing: true
           fail_action: false
-          artifact_name: 'zap-scan-report'
 
       - name: DAST scan summary
         if: always()
@@ -871,7 +870,10 @@ jobs:
         continue-on-error: true
         with:
           name: zap-baseline-report
-          path: report_html.html
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md
           retention-days: 30
 
   # ===========================================================================
