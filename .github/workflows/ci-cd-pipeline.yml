@@ -87,7 +87,7 @@ jobs:
           
           SERVICES=()
           
-          # Use github.event.before to capture ALL commits in the push (not just HEAD~1)
+          
           if [ "${{ github.event_name }}" == "push" ]; then
             BEFORE_SHA="${{ github.event.before }}"
             # Handle initial push (no previous commit)
@@ -250,7 +250,7 @@ jobs:
 
       - name: Run Gitleaks
         run: |
-          # Download Gitleaks binary directly to avoid license check in the Action
+          # Download Gitleaks binary directly 
           wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
           tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
           sudo mv gitleaks /usr/local/bin/
@@ -332,7 +332,7 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::8}"
           TIMESTAMP="${{ needs.detect-changes.outputs.timestamp }}"
           
-          # Use final tag directly (no temporary scan tag)
+          # Use final tag 
           IMAGE_TAG="${SHORT_SHA}-${TIMESTAMP}"
           FULL_IMAGE="${ECR_REGISTRY}/${SERVICE_NAME}:${IMAGE_TAG}"
           
@@ -513,7 +513,7 @@ jobs:
     name: Wait for Staging Deployment
     runs-on: ubuntu-latest
     needs: [detect-changes, update-gitops]
-    # Only run if services were actually changed and GitOps was updated
+    # Only run if services were changed and GitOps was updated
     if: |
       always() &&
       github.ref == 'refs/heads/main' && 
@@ -522,89 +522,41 @@ jobs:
       needs.update-gitops.result == 'success'
     env:
       STAGING_URL: https://staging.aurora-glam.com
-      MAX_WAIT_SECONDS: 180
-      CHECK_INTERVAL: 15
+      # 3.5 minutes to ensure new images are deployed
+      ARGOCD_SYNC_WAIT: 210
     steps:
-      - name: Wait for ArgoCD sync and verify deployment
-        id: wait
+      - name: Wait for ArgoCD to sync new images
         run: |
-          echo "##  Waiting for Staging Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "##  Waiting for ArgoCD Sync" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD syncs every **3 minutes**. Waiting **${ARGOCD_SYNC_WAIT}s (3.5 min)** to ensure new images are deployed..." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Services to check based on what was changed
-          SERVICES='${{ needs.detect-changes.outputs.services }}'
+          echo " Waiting ${ARGOCD_SYNC_WAIT}s for ArgoCD to detect and deploy new images..."
+          echo "   ArgoCD polls GitOps repo every 3 minutes"
+          echo "   This ensures the new Docker images are actually running"
+          echo ""
           
-          # Debug: Show what services we're checking
-          echo "Services to verify: $SERVICES"
-          
-          # If no services, skip
-          if [ "$SERVICES" == "[]" ] || [ -z "$SERVICES" ]; then
-            echo "No services changed, skipping health check"
-            echo "deployment_ready=skipped" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Map service names to health endpoints
-          declare -A HEALTH_ENDPOINTS
-          HEALTH_ENDPOINTS["user_service"]="/api/users/health"
-          HEALTH_ENDPOINTS["appointment_service"]="/api/appointments/health"
-          HEALTH_ENDPOINTS["service_management"]="/api/services/health"
-          HEALTH_ENDPOINTS["staff_management"]="/api/staff/health"
-          HEALTH_ENDPOINTS["notification_service"]="/api/notifications/health"
-          HEALTH_ENDPOINTS["reports_analytics"]="/api/reports/health"
-          
-          # Initial wait for ArgoCD to detect GitOps change
-          echo " Waiting 30s for ArgoCD to detect GitOps update..."
-          sleep 30
-          
-          ELAPSED=30
-          ALL_HEALTHY=false
-          ATTEMPT=1
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Polling health endpoints (max ${MAX_WAIT_SECONDS}s)...**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          while [ $ELAPSED -lt $MAX_WAIT_SECONDS ]; do
-            echo "Attempt $ATTEMPT (${ELAPSED}s elapsed)..."
-            ALL_HEALTHY=true
-            
-            # Check each changed service
-            for service in $(echo "$SERVICES" | jq -r '.[]' 2>/dev/null); do
-              ENDPOINT="${HEALTH_ENDPOINTS[$service]}"
-              if [ -n "$ENDPOINT" ]; then
-                FULL_URL="${STAGING_URL}${ENDPOINT}"
-                
-                if curl -sf "$FULL_URL" --max-time 5 > /dev/null 2>&1; then
-                  echo "  ✅ $service is healthy"
-                else
-                  echo "   $service not ready yet"
-                  ALL_HEALTHY=false
-                fi
-              fi
-            done
-            
-            if [ "$ALL_HEALTHY" = true ]; then
-              echo ""
-              echo "✅ All services are healthy!"
-              echo "deployment_ready=true" >> $GITHUB_OUTPUT
-              break
+          # Show countdown every 30 seconds
+          REMAINING=$ARGOCD_SYNC_WAIT
+          while [ $REMAINING -gt 0 ]; do
+            echo "     ${REMAINING}s remaining..."
+            if [ $REMAINING -ge 30 ]; then
+              sleep 30
+              REMAINING=$((REMAINING - 30))
+            else
+              sleep $REMAINING
+              REMAINING=0
             fi
-            
-            sleep $CHECK_INTERVAL
-            ELAPSED=$((ELAPSED + CHECK_INTERVAL))
-            ATTEMPT=$((ATTEMPT + 1))
           done
           
-          if [ "$ALL_HEALTHY" = false ]; then
-            echo "::warning::Not all services healthy after ${MAX_WAIT_SECONDS}s, proceeding anyway"
-            echo "deployment_ready=partial" >> $GITHUB_OUTPUT
-          fi
+          echo ""
+          echo "✅ ArgoCD sync wait complete!"
 
-      - name: Final health check summary
+      - name: Verify all health endpoints
+        id: health
         run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Final Health Status" >> $GITHUB_STEP_SUMMARY
+          echo "### Health Check Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           ENDPOINTS=(
@@ -619,20 +571,32 @@ jobs:
           echo "| Service | Endpoint | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|----------|--------|" >> $GITHUB_STEP_SUMMARY
           
+          ALL_HEALTHY=true
           for entry in "${ENDPOINTS[@]}"; do
             SERVICE=$(echo $entry | cut -d'|' -f1)
             ENDPOINT=$(echo $entry | cut -d'|' -f2)
-            FULL_URL="https://staging.aurora-glam.com${ENDPOINT}"
+            FULL_URL="${STAGING_URL}${ENDPOINT}"
             
-            if curl -sf "$FULL_URL" --max-time 5 > /dev/null 2>&1; then
+            if curl -sf "$FULL_URL" --max-time 10 > /dev/null 2>&1; then
               echo "| $SERVICE | $ENDPOINT | ✅ Healthy |" >> $GITHUB_STEP_SUMMARY
+              echo "✅ $SERVICE is healthy"
             else
               echo "| $SERVICE | $ENDPOINT | ⚠️ Unavailable |" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️  $SERVICE not responding"
+              ALL_HEALTHY=false
             fi
           done
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployment Status:** \`${{ steps.wait.outputs.deployment_ready }}\`" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$ALL_HEALTHY" = true ]; then
+            echo "deployment_ready=true" >> $GITHUB_OUTPUT
+            echo "**Status:** ✅ All services healthy and ready for testing" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "deployment_ready=partial" >> $GITHUB_OUTPUT
+            echo "**Status:** ⚠️ Some services unavailable, proceeding with testing" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Not all services healthy after ArgoCD sync"
+          fi
 
   # ===========================================================================
   # Stage 8: Performance Testing (Locust) - Automated Smoke Test
