@@ -184,35 +184,6 @@ jobs:
           # Exit with test result
           exit $TEST_EXIT_CODE
 
-      - name: Add test summary
-        if: always()
-        run: |
-          PASSED="${{ steps.pytest.outputs.passed }}"
-          FAILED="${{ steps.pytest.outputs.failed }}"
-          SKIPPED="${{ steps.pytest.outputs.skipped }}"
-          EXIT_CODE="${{ steps.pytest.outputs.exit_code }}"
-          
-          # Default to 0 if empty
-          PASSED=${PASSED:-0}
-          FAILED=${FAILED:-0}
-          SKIPPED=${SKIPPED:-0}
-          
-          echo "## 🧪 Unit Tests - ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "$EXIT_CODE" == "0" ]; then
-            echo "✅ **All tests passed!**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Some tests failed**" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "| Status | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
-
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
